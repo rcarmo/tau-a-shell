@@ -72,7 +72,7 @@ def main(
         render_session_list(SessionManager().list_sessions())
         raise typer.Exit()
 
-    if prompt_option is None and (prompt_arg is None or prompt_arg == "tui"):
+    if prompt_option is None and prompt_arg is None:
         try:
             anyio.run(run_openai_tui, model, cwd or Path.cwd(), resume, new_session)
         except RuntimeError as exc:

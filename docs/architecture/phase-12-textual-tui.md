@@ -28,12 +28,6 @@ The CLI opens the TUI by default:
 tau
 ```
 
-The older explicit `tui` argument is still accepted as an alias:
-
-```bash
-tau tui
-```
-
 Global options can be passed before starting the TUI:
 
 ```bash

@@ -171,7 +171,9 @@ def test_cli_exits_nonzero_when_print_mode_fails(monkeypatch: pytest.MonkeyPatch
     assert result.exit_code == 1
 
 
-def test_tui_command_invokes_tui_runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_default_tui_invokes_tui_runner_with_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     calls: list[tuple[str, Path, str | None, bool]] = []
 
     async def fake_run_openai_tui(
@@ -190,7 +192,6 @@ def test_tui_command_invokes_tui_runner(monkeypatch: pytest.MonkeyPatch, tmp_pat
             "fake",
             "--resume",
             "session-1",
-            "tui",
         ],
     )
 
@@ -198,7 +199,7 @@ def test_tui_command_invokes_tui_runner(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert calls == [("fake", tmp_path, "session-1", False)]
 
 
-def test_tui_command_rejects_resume_with_new_session(
+def test_default_tui_rejects_resume_with_new_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     async def fake_run_openai_tui(
@@ -216,7 +217,6 @@ def test_tui_command_rejects_resume_with_new_session(
             "--resume",
             "session-1",
             "--new-session",
-            "tui",
         ],
     )
 

@@ -94,8 +94,7 @@ tau
 
 creates a new session.
 
-The older explicit `tui` argument and the explicit new-session flag are also
-accepted for clarity:
+The explicit new-session flag is also accepted for clarity:
 
 ```bash
 tau --new-session
