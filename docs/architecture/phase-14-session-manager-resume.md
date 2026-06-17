@@ -92,9 +92,9 @@ Default behavior:
 tau tui
 ```
 
-opens or creates the default project session.
+creates a new session.
 
-Create a new session:
+The explicit new-session flag is also accepted for clarity:
 
 ```bash
 tau --new-session tui

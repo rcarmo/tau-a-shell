@@ -175,15 +175,13 @@ async def run_tui_app(
     provider = OpenAICompatibleProvider(openai_compatible_config_from_env())
     manager = session_manager or SessionManager()
     try:
-        if new_session:
-            record = manager.create_session(cwd=cwd, model=model)
-        elif session_id is not None:
+        if session_id is not None:
             existing_record = manager.get_session(session_id)
             if existing_record is None:
                 raise RuntimeError(f"Unknown session: {session_id}")
             record = existing_record
         else:
-            record = manager.get_or_create_default_session(cwd=cwd, model=model)
+            record = manager.create_session(cwd=cwd, model=model)
 
         session = await CodingSession.load(
             CodingSessionConfig(

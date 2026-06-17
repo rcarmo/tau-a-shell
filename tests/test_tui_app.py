@@ -13,8 +13,10 @@ from tau_agent import (
     ToolResultMessage,
     UserMessage,
 )
+from tau_coding.session_manager import CodingSessionRecord
 from tau_coding.skills import Skill
 from tau_coding.tools import create_coding_tools
+from tau_coding.tui import app as tui_app
 from tau_coding.tui.app import TauTuiApp
 from tau_coding.tui.widgets import render_session_sidebar
 
@@ -102,3 +104,112 @@ async def test_tui_prompt_worker_refreshes_directly() -> None:
 
     assert refreshes == 2
     assert app.state.running is False
+
+
+@pytest.mark.anyio
+async def test_run_tui_app_creates_new_session_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    record = CodingSessionRecord(
+        id="new-session",
+        path=tmp_path / "new-session.jsonl",
+        cwd=tmp_path,
+        model="fake-model",
+        title=None,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+
+    class FakeProvider:
+        async def aclose(self) -> None:
+            calls.append("provider_closed")
+
+    class FakeManager:
+        def create_session(self, *, cwd: Path, model: str) -> CodingSessionRecord:
+            calls.append(f"create:{cwd}:{model}")
+            return record
+
+        def get_session(self, session_id: str) -> CodingSessionRecord | None:
+            calls.append(f"get:{session_id}")
+            return None
+
+        def get_or_create_default_session(self, *, cwd: Path, model: str) -> CodingSessionRecord:
+            raise AssertionError("default session should not be opened implicitly")
+
+    class FakeCodingSession:
+        @classmethod
+        async def load(cls, config: object) -> str:
+            calls.append("load")
+            return "session"
+
+    class FakeApp:
+        def __init__(self, session: str) -> None:
+            assert session == "session"
+
+        async def run_async(self) -> None:
+            calls.append("run")
+
+    monkeypatch.setattr(tui_app, "openai_compatible_config_from_env", lambda: object())
+    monkeypatch.setattr(tui_app, "OpenAICompatibleProvider", lambda config: FakeProvider())
+    monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
+    monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
+
+    await tui_app.run_tui_app(model="fake-model", cwd=tmp_path, session_manager=FakeManager())
+
+    assert calls == [f"create:{tmp_path}:fake-model", "load", "run", "provider_closed"]
+
+
+@pytest.mark.anyio
+async def test_run_tui_app_resumes_explicit_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+    record = CodingSessionRecord(
+        id="session-1",
+        path=tmp_path / "session-1.jsonl",
+        cwd=tmp_path,
+        model="fake-model",
+        title=None,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+
+    class FakeProvider:
+        async def aclose(self) -> None:
+            calls.append("provider_closed")
+
+    class FakeManager:
+        def create_session(self, *, cwd: Path, model: str) -> CodingSessionRecord:
+            raise AssertionError("explicit resume should not create a new session")
+
+        def get_session(self, session_id: str) -> CodingSessionRecord | None:
+            calls.append(f"get:{session_id}")
+            return record
+
+    class FakeCodingSession:
+        @classmethod
+        async def load(cls, config: object) -> str:
+            calls.append("load")
+            return "session"
+
+    class FakeApp:
+        def __init__(self, session: str) -> None:
+            assert session == "session"
+
+        async def run_async(self) -> None:
+            calls.append("run")
+
+    monkeypatch.setattr(tui_app, "openai_compatible_config_from_env", lambda: object())
+    monkeypatch.setattr(tui_app, "OpenAICompatibleProvider", lambda config: FakeProvider())
+    monkeypatch.setattr(tui_app, "CodingSession", FakeCodingSession)
+    monkeypatch.setattr(tui_app, "TauTuiApp", FakeApp)
+
+    await tui_app.run_tui_app(
+        model="fake-model",
+        cwd=tmp_path,
+        session_id="session-1",
+        session_manager=FakeManager(),
+    )
+
+    assert calls == ["get:session-1", "load", "run", "provider_closed"]

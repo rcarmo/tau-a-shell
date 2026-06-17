@@ -53,7 +53,7 @@ def main(
     ] = None,
     new_session: Annotated[
         bool,
-        typer.Option("--new-session", help="Create a new session in TUI mode."),
+        typer.Option("--new-session", help="Create a new session in TUI mode (default)."),
     ] = False,
     version: Annotated[
         bool,
