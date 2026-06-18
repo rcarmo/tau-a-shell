@@ -180,6 +180,8 @@ A custom picker UI can also read the same data directly:
 - `session.available_model_choices`
 - `session.available_models`
 - `session.available_providers`
+- `session.thinking_level`
+- `session.available_thinking_levels`
 - `session.session_manager`
 
 ## Keybindings
@@ -197,6 +199,7 @@ The built-in configurable action names are:
 - `accept_completion`
 - `completion_next`
 - `completion_previous`
+- `thinking_cycle`
 - `quit`
 
 The built-in themes are `tau-dark` and `high-contrast`. They resolve to

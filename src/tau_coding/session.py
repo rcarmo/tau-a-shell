@@ -15,6 +15,7 @@ from tau_agent.session import (
     SessionInfoEntry,
     SessionState,
     SessionStorage,
+    ThinkingLevelChangeEntry,
 )
 from tau_agent.tools import AgentTool
 from tau_ai import ModelProvider
@@ -48,6 +49,13 @@ from tau_coding.system_prompt import (
     BuildSystemPromptOptions,
     ProjectContextFile,
     build_system_prompt,
+)
+from tau_coding.thinking import (
+    DEFAULT_THINKING_LEVEL,
+    THINKING_LEVELS,
+    ThinkingLevel,
+    next_thinking_level,
+    normalize_thinking_level,
 )
 from tau_coding.tools import create_coding_tools
 
@@ -90,6 +98,7 @@ class CodingSessionConfig:
     provider_name: str = "openai"
     provider_settings: ProviderSettings | None = None
     auto_compact_token_threshold: int | None = None
+    thinking_level: ThinkingLevel = DEFAULT_THINKING_LEVEL
 
 
 class CodingSession:
@@ -126,6 +135,7 @@ class CodingSession:
         self._provider_settings = config.provider_settings
         self._resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
         self._auto_compact_token_threshold = config.auto_compact_token_threshold
+        self._thinking_level = _state_thinking_level(state, config.thinking_level)
         self._owned_providers: list[ClosableModelProvider] = []
 
     @classmethod
@@ -135,9 +145,14 @@ class CodingSession:
         if not entries:
             info = SessionInfoEntry(cwd=str(config.cwd))
             model = ModelChangeEntry(parent_id=info.id, model=config.model)
+            thinking = ThinkingLevelChangeEntry(
+                parent_id=model.id,
+                thinking_level=config.thinking_level,
+            )
             await config.storage.append(info)
             await config.storage.append(model)
-            entries = [info, model]
+            await config.storage.append(thinking)
+            entries = [info, model, thinking]
 
         linear_state = SessionState.from_entries(entries)
         state = (
@@ -243,6 +258,16 @@ class CodingSession:
         return self._state
 
     @property
+    def thinking_level(self) -> ThinkingLevel:
+        """Return the active thinking mode for future turns."""
+        return self._thinking_level
+
+    @property
+    def available_thinking_levels(self) -> tuple[ThinkingLevel, ...]:
+        """Return thinking modes supported by Tau's coding session UI."""
+        return THINKING_LEVELS
+
+    @property
     def storage(self) -> SessionStorage:
         """Return the backing session storage."""
         return self._config.storage
@@ -326,6 +351,37 @@ class CodingSession:
         self._provider_name = provider_config.name
         self.set_model(provider_config.default_model)
 
+    async def set_thinking_level(self, level: str) -> str:
+        """Persist and activate a thinking mode for future turns."""
+        normalized = normalize_thinking_level(level)
+        if normalized == self._thinking_level:
+            return f"Thinking mode: {normalized}"
+
+        entry = ThinkingLevelChangeEntry(
+            parent_id=self._last_parent_id,
+            thinking_level=normalized,
+        )
+        await self._config.storage.append(entry)
+        leaf = LeafEntry(parent_id=entry.id, entry_id=entry.id)
+        await self._config.storage.append(leaf)
+        self._last_parent_id = entry.id
+
+        entries = await self._config.storage.read_all()
+        self._state = SessionState.from_entries(entries, leaf_id=entry.id)
+        self._thinking_level = normalized
+        if self._config.session_id is not None and self._config.session_manager is not None:
+            self._config.session_manager.touch_session(self._config.session_id, model=self.model)
+        return f"Thinking mode: {normalized}"
+
+    async def cycle_thinking_level(self) -> str:
+        """Cycle to the next supported thinking mode and persist it."""
+        return await self.set_thinking_level(
+            next_thinking_level(
+                self._thinking_level,
+                available=self.available_thinking_levels,
+            )
+        )
+
     def reload(self) -> None:
         """Reload Tau-owned resources and provider settings for future turns."""
         resources = _load_session_resources(self._resource_paths, self._config.context_files)
@@ -373,6 +429,7 @@ class CodingSession:
                 provider_name=self._provider_name,
                 provider_settings=self._provider_settings,
                 auto_compact_token_threshold=self._auto_compact_token_threshold,
+                thinking_level=self._thinking_level,
             )
         )
         self._config = replacement._config
@@ -388,6 +445,7 @@ class CodingSession:
         self._provider_settings = replacement._provider_settings
         self._resource_paths = replacement._resource_paths
         self._auto_compact_token_threshold = replacement._auto_compact_token_threshold
+        self._thinking_level = replacement._thinking_level
         return f"Resumed session: {record.id}"
 
     async def new_session(self) -> str:
@@ -419,6 +477,7 @@ class CodingSession:
         self._provider_settings = replacement._provider_settings
         self._resource_paths = replacement._resource_paths
         self._auto_compact_token_threshold = replacement._auto_compact_token_threshold
+        self._thinking_level = replacement._thinking_level
         return f"Started new session: {record.id}"
 
     async def compact(self, summary: str) -> str:
@@ -524,6 +583,16 @@ def _last_parent_id_from_state(state: SessionState) -> str | None:
     if state.entries:
         return state.entries[-1].id
     return None
+
+
+def _state_thinking_level(
+    state: SessionState,
+    default: ThinkingLevel,
+) -> ThinkingLevel:
+    thinking_level = getattr(state, "thinking_level", None)
+    if thinking_level is None:
+        return default
+    return normalize_thinking_level(thinking_level)
 
 
 def _load_session_resources(

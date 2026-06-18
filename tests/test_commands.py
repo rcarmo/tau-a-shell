@@ -37,6 +37,8 @@ class FakeSession:
         )
         self.context_token_estimate = 123
         self.auto_compact_token_threshold = 200
+        self.thinking_level = "medium"
+        self.available_thinking_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
         self.resource_diagnostics = ()
         self.session_id = "session-1"
         self.session_manager: SessionManager | None = manager
@@ -104,6 +106,7 @@ def test_status_includes_session_details(tmp_path: Path) -> None:
     assert "Skills: 1" in result.message
     assert "Context files: 1" in result.message
     assert "Estimated context tokens: 123" in result.message
+    assert "Thinking mode: medium" in result.message
     assert "Auto compact threshold: 200" in result.message
     assert "Resource diagnostics: 0" in result.message
     assert "Session: session-1" in result.message
@@ -129,6 +132,22 @@ def test_model_command_rejects_unknown_model(tmp_path: Path) -> None:
     assert result.message is not None
     assert "Unknown model for provider openai: missing" in result.message
     assert session.model == "fake-model"
+
+
+def test_thinking_command_lists_and_requests_modes(tmp_path: Path) -> None:
+    session = FakeSession(tmp_path)
+    registry = create_default_command_registry()
+
+    list_result = registry.execute(session, "/thinking")
+    switch_result = registry.execute(session, "/thinking high")
+    unknown_result = registry.execute(session, "/thinking maximum")
+
+    assert list_result.message is not None
+    assert "Thinking mode: medium" in list_result.message
+    assert "Available modes: off, minimal, low, medium, high, xhigh" in list_result.message
+    assert switch_result.thinking_level == "high"
+    assert unknown_result.message is not None
+    assert "Unknown thinking mode: maximum" in unknown_result.message
 
 
 def test_provider_command_is_not_registered(tmp_path: Path) -> None:

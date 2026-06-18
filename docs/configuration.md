@@ -117,6 +117,7 @@ Example:
     "accept_completion": "f2",
     "completion_next": "down",
     "completion_previous": "up",
+    "thinking_cycle": "shift+tab",
     "quit": "ctrl+d"
   }
 }
@@ -132,7 +133,7 @@ The built-in sidebar is responsive: Tau shows it on medium or larger terminal
 windows and hides it automatically when the terminal is narrow or short.
 
 Any omitted keybinding uses the built-in default. Key names use Textual's key
-syntax, such as `ctrl+k`, `tab`, `down`, `up`, and `f2`. Tau rejects unknown
+syntax, such as `ctrl+k`, `tab`, `shift+tab`, `down`, `up`, and `f2`. Tau rejects unknown
 themes, unknown keybinding names, empty keys, and duplicate assignments so
 mistakes fail early instead of silently changing terminal behavior.
 
@@ -229,7 +230,12 @@ Useful TUI commands:
 ```text
 /context
 /reload
+/thinking
+/thinking high
 ```
+
+In the TUI, `Shift-Tab` cycles the active thinking mode by default. Remap it in
+`~/.tau/tui.json` with the `thinking_cycle` keybinding.
 
 ## Context Management
 
@@ -238,6 +244,7 @@ Useful TUI commands:
 ```text
 Estimated context tokens: <count>
 Context token breakdown: system=<count>, messages=<count>, tools=<count>
+Thinking mode: <mode>
 ```
 
 Manual compaction is available inside the TUI:

@@ -1,6 +1,7 @@
 """Minimal Textual app for Tau coding sessions."""
 
 from collections.abc import AsyncIterator, Sequence
+from inspect import isawaitable
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Protocol, cast
 
@@ -94,6 +95,8 @@ class CompletionActionTarget(Protocol):
 
     def action_open_session_picker(self) -> None: ...
 
+    def action_cycle_thinking(self) -> None: ...
+
 
 class SessionCompletionRecord(Protocol):
     """Session metadata needed to render resume picker completions."""
@@ -141,6 +144,10 @@ class PromptInput(Input):
         """Open the app-level session picker."""
         self._completion_target().action_open_session_picker()
 
+    def action_cycle_thinking(self) -> None:
+        """Cycle the app-level thinking mode."""
+        self._completion_target().action_cycle_thinking()
+
     async def action_quit(self) -> None:
         """Quit the app through the app-level action."""
         await self.app.action_quit()
@@ -165,6 +172,9 @@ class PromptInput(Input):
         elif event.key == keybindings.session_picker:
             event.stop()
             self._completion_target().action_open_session_picker()
+        elif _is_thinking_cycle_key(event.key, keybindings.thinking_cycle):
+            event.stop()
+            self._completion_target().action_cycle_thinking()
         elif event.key == keybindings.completion_next:
             event.stop()
             self._completion_target().action_completion_next()
@@ -852,6 +862,8 @@ class TauTuiApp(App[None]):
                 self._open_login(command.login_provider)
             if command.model_picker_requested:
                 self._open_model_picker()
+            if command.thinking_level is not None:
+                await self._set_thinking_level(command.thinking_level)
             if command.message:
                 self._show_command_message(text, command.message)
             self._refresh()
@@ -946,6 +958,13 @@ class TauTuiApp(App[None]):
             SessionPickerScreen(records, theme=self.tui_settings.resolved_theme),
             callback=self._handle_session_picker_result,
         )
+
+    def action_cycle_thinking(self) -> None:
+        """Cycle the active thinking mode."""
+        if self.state.running:
+            self._notify("Tau is already working. Press Escape to cancel.")
+            return
+        self.run_worker(self._cycle_thinking_level(), exclusive=False)
 
     def _handle_session_picker_result(self, session_id: str | None) -> None:
         if session_id is None:
@@ -1072,6 +1091,34 @@ class TauTuiApp(App[None]):
         self._notify(f"Current model: {choice.provider_name}:{choice.model}")
         self._refresh()
 
+    async def _set_thinking_level(self, level: str) -> None:
+        setter = getattr(self.session, "set_thinking_level", None)
+        if setter is None:
+            self._notify("Thinking controls are not available.", severity="warning")
+            return
+        try:
+            result = setter(level)
+            message = await result if isawaitable(result) else result
+        except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
+            self._notify(f"Could not change thinking mode: {exc}", severity="error")
+            return
+        self._notify(str(message) if message else f"Thinking mode: {level}")
+        self._refresh()
+
+    async def _cycle_thinking_level(self) -> None:
+        cycler = getattr(self.session, "cycle_thinking_level", None)
+        if cycler is None:
+            self._notify("Thinking controls are not available.", severity="warning")
+            return
+        try:
+            result = cycler()
+            message = await result if isawaitable(result) else result
+        except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
+            self._notify(f"Could not change thinking mode: {exc}", severity="error")
+            return
+        self._notify(str(message) if message else "Thinking mode changed.")
+        self._refresh()
+
     def _notify(
         self,
         message: str,
@@ -1114,6 +1161,7 @@ class TauTuiApp(App[None]):
             prompt_templates=self.session.prompt_templates,
             model_names=self.session.available_models,
             provider_names=self.session.available_providers,
+            thinking_levels=getattr(self.session, "available_thinking_levels", ()),
             session_options=_session_options(self.session),
         )
 
@@ -1191,6 +1239,12 @@ def _command_output_title(command_text: str) -> str:
     return f"/{command_name or 'help'}"
 
 
+def _is_thinking_cycle_key(key: str, configured_key: str) -> bool:
+    if key == configured_key:
+        return True
+    return configured_key == "shift+tab" and key == "backtab"
+
+
 def _theme_css_variables(theme: TuiTheme) -> dict[str, str]:
     return {
         "tau-screen-background": theme.screen_background,
@@ -1213,6 +1267,7 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         Binding(keybindings.cancel, "cancel", "Cancel"),
         Binding(keybindings.command_palette, "open_command_palette", "Commands"),
         Binding(keybindings.session_picker, "open_session_picker", "Sessions"),
+        Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking"),
         Binding(
             keybindings.accept_completion,
             "accept_completion",
@@ -1239,6 +1294,7 @@ def _prompt_bindings(keybindings: TuiKeybindings) -> list[Binding]:
     return [
         Binding(keybindings.command_palette, "open_command_palette", show=False, priority=True),
         Binding(keybindings.session_picker, "open_session_picker", show=False, priority=True),
+        Binding(keybindings.thinking_cycle, "cycle_thinking", show=False, priority=True),
         Binding(keybindings.accept_completion, "accept_completion", show=False, priority=True),
         Binding(keybindings.completion_next, "completion_next", show=False, priority=True),
         Binding(keybindings.completion_previous, "completion_previous", show=False, priority=True),

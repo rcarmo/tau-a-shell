@@ -86,6 +86,7 @@ from tau_coding.system_prompt import (
     format_project_context,
     format_skills_for_prompt,
 )
+from tau_coding.thinking import DEFAULT_THINKING_LEVEL, THINKING_LEVELS, ThinkingLevel
 from tau_coding.tools import (
     ToolDefinition,
     create_bash_tool,
@@ -110,6 +111,7 @@ __all__ = [
     "CommandResult",
     "DEFAULT_MODEL",
     "DEFAULT_PROVIDER_NAME",
+    "DEFAULT_THINKING_LEVEL",
     "BuildSystemPromptOptions",
     "BUILTIN_PROVIDER_CATALOG",
     "EventRenderer",
@@ -135,6 +137,7 @@ __all__ = [
     "TauResourcePaths",
     "ToolDefinition",
     "TranscriptRenderer",
+    "ThinkingLevel",
     "anthropic_config_from_provider",
     "build_skill_index",
     "build_system_prompt",
@@ -162,6 +165,7 @@ __all__ = [
     "estimate_message_tokens",
     "estimate_text_tokens",
     "estimate_tool_tokens",
+    "THINKING_LEVELS",
     "summarize_messages_for_compaction",
     "expand_skill_command",
     "format_available_tools",

@@ -72,6 +72,7 @@ def build_completion_state(
     prompt_templates: Sequence[PromptTemplate],
     model_names: Sequence[str] = (),
     provider_names: Sequence[str] = (),
+    thinking_levels: Sequence[str] = (),
     session_ids: Sequence[str] = (),
     session_options: Sequence[CompletionOption] = (),
 ) -> CompletionState:
@@ -93,6 +94,7 @@ def build_completion_state(
         token_end=token_end,
         model_names=model_names,
         provider_names=provider_names,
+        thinking_levels=thinking_levels,
         session_ids=session_ids,
         session_options=session_options,
     )
@@ -172,6 +174,7 @@ def _command_argument_completions(
     token_end: int,
     model_names: Sequence[str],
     provider_names: Sequence[str],
+    thinking_levels: Sequence[str],
     session_ids: Sequence[str],
     session_options: Sequence[CompletionOption],
 ) -> tuple[CompletionItem, ...] | None:
@@ -202,6 +205,13 @@ def _command_argument_completions(
                 if session_options
                 else _completion_options(session_ids, description="Resume session")
             ),
+            sort=False,
+        )
+    if command_name == "thinking":
+        return _value_completions(
+            text=text,
+            start=token_end + 1,
+            options=_completion_options(thinking_levels, description="Set thinking mode"),
             sort=False,
         )
     return None

@@ -60,6 +60,9 @@ class SessionSummarySource(Protocol):
     @property
     def auto_compact_token_threshold(self) -> int | None: ...
 
+    @property
+    def thinking_level(self) -> str: ...
+
 
 class SessionSidebar(Static):
     """Compact sidebar with current session metadata."""
@@ -391,6 +394,9 @@ def _context_usage(session: SessionSummarySource) -> str:
 
 
 def _thinking_level(session: SessionSummarySource) -> str:
+    explicit_level = getattr(session, "thinking_level", None)
+    if explicit_level:
+        return str(explicit_level)
     state = getattr(session, "state", None)
     thinking_level = getattr(state, "thinking_level", None)
     return str(thinking_level) if thinking_level else "--"

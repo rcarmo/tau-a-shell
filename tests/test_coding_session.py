@@ -10,6 +10,7 @@ from tau_agent.session import (
     MessageEntry,
     ModelChangeEntry,
     SessionInfoEntry,
+    ThinkingLevelChangeEntry,
 )
 from tau_ai import FakeProvider, ProviderResponseEndEvent, ProviderResponseStartEvent
 from tau_coding import (
@@ -61,8 +62,16 @@ async def test_load_empty_session_appends_metadata(tmp_path: Path) -> None:
     assert entries[1] == ModelChangeEntry(
         id=entries[1].id, parent_id=entries[0].id, model="fake", timestamp=entries[1].timestamp
     )
+    assert entries[2] == ThinkingLevelChangeEntry(
+        id=entries[2].id,
+        parent_id=entries[1].id,
+        thinking_level="medium",
+        timestamp=entries[2].timestamp,
+    )
     assert session.messages == ()
     assert session.state.model == "fake"
+    assert session.thinking_level == "medium"
+    assert session.available_thinking_levels == ("off", "minimal", "low", "medium", "high", "xhigh")
     assert session.cwd == tmp_path
     assert session.model == "fake"
     assert [tool.name for tool in session.tools] == ["read", "write", "edit", "bash"]
@@ -123,6 +132,38 @@ async def test_context_usage_recalculates_after_prompt_and_compaction(tmp_path: 
     assert after_compaction_usage.message_count == 1
     assert after_compaction_usage.total_tokens < after_prompt_usage.total_tokens
     assert session.context_token_estimate == after_compaction_usage.total_tokens
+
+
+@pytest.mark.anyio
+async def test_session_persists_and_replays_thinking_level_changes(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    message = await session.set_thinking_level("high")
+    entries = await storage.read_all()
+    thinking_entries = [entry for entry in entries if entry.type == "thinking_level_change"]
+    leaves = [entry for entry in entries if entry.type == "leaf"]
+
+    restored = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    assert message == "Thinking mode: high"
+    assert session.thinking_level == "high"
+    assert len(thinking_entries) == 2
+    assert thinking_entries[-1].thinking_level == "high"
+    assert leaves[-1].entry_id == thinking_entries[-1].id
+    assert restored.thinking_level == "high"
+    assert restored.state.thinking_level == "high"
+
+
+@pytest.mark.anyio
+async def test_session_cycles_thinking_level(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    message = await session.cycle_thinking_level()
+
+    assert message == "Thinking mode: high"
+    assert session.thinking_level == "high"
 
 
 @pytest.mark.anyio

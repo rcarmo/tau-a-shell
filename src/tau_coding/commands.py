@@ -12,6 +12,7 @@ from tau_coding.resources import ResourceDiagnostic
 from tau_coding.session_manager import CodingSessionRecord, SessionManager
 from tau_coding.skills import Skill
 from tau_coding.system_prompt import ProjectContextFile
+from tau_coding.thinking import normalize_thinking_level
 
 
 class CommandSession(Protocol):
@@ -51,6 +52,12 @@ class CommandSession(Protocol):
     def auto_compact_token_threshold(self) -> int | None: ...
 
     @property
+    def thinking_level(self) -> str: ...
+
+    @property
+    def available_thinking_levels(self) -> Sequence[str]: ...
+
+    @property
     def resource_diagnostics(self) -> Sequence[ResourceDiagnostic]: ...
 
     @property
@@ -78,6 +85,7 @@ class CommandResult:
     login_picker_requested: bool = False
     login_provider: str | None = None
     model_picker_requested: bool = False
+    thinking_level: str | None = None
     message: str | None = None
 
 
@@ -263,6 +271,15 @@ def create_default_command_registry() -> CommandRegistry:
     )
     registry.register(
         SlashCommand(
+            name="thinking",
+            usage="/thinking [mode]",
+            description="Show or set the active thinking mode.",
+            handler=_thinking_command,
+            search_terms=("reasoning", "effort"),
+        )
+    )
+    registry.register(
+        SlashCommand(
             name="login",
             usage="/login [provider]",
             description="Save an API key for a built-in provider.",
@@ -310,6 +327,7 @@ def _status_command(context: CommandContext) -> CommandResult:
         f"Prompt templates: {len(session.prompt_templates)}",
         f"Context files: {len(session.context_files)}",
         f"Estimated context tokens: {session.context_token_estimate}",
+        f"Thinking mode: {session.thinking_level}",
         f"Resource diagnostics: {len(session.resource_diagnostics)}",
     ]
     if context_usage is not None:
@@ -450,6 +468,22 @@ def _model_command(context: CommandContext) -> CommandResult:
         return CommandResult(handled=True, message=f"Current model: {model}")
 
     return CommandResult(handled=True, model_picker_requested=True)
+
+
+def _thinking_command(context: CommandContext) -> CommandResult:
+    session = context.session
+    if not context.args:
+        lines = [
+            f"Thinking mode: {session.thinking_level}",
+            f"Available modes: {', '.join(session.available_thinking_levels)}",
+        ]
+        return CommandResult(handled=True, message="\n".join(lines))
+
+    try:
+        level = normalize_thinking_level(context.args)
+    except ValueError as exc:
+        return CommandResult(handled=True, message=str(exc))
+    return CommandResult(handled=True, thinking_level=level)
 
 
 def _login_command(context: CommandContext) -> CommandResult:

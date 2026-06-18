@@ -71,6 +71,8 @@ class FakeSession:
         )
         self.context_token_estimate = 123
         self.auto_compact_token_threshold = 1000
+        self.thinking_level = "medium"
+        self.available_thinking_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
         self.state = FakeSessionState()
         self.resource_diagnostics = ()
         self.session_manager = None
@@ -100,6 +102,8 @@ class FakeSession:
             return CommandResult(handled=True, login_provider="openai")
         if text == "/model":
             return CommandResult(handled=True, model_picker_requested=True)
+        if text.startswith("/thinking "):
+            return CommandResult(handled=True, thinking_level=text.removeprefix("/thinking "))
         return CommandResult(handled=False)
 
     def set_model(self, model: str) -> None:
@@ -112,6 +116,18 @@ class FakeSession:
 
     def reload(self) -> None:
         self.reload_count += 1
+
+    async def set_thinking_level(self, level: str) -> str:
+        self.thinking_level = level
+        self.state.thinking_level = level
+        return f"Thinking mode: {level}"
+
+    async def cycle_thinking_level(self) -> str:
+        levels = self.available_thinking_levels
+        current_index = levels.index(self.thinking_level)
+        self.thinking_level = levels[(current_index + 1) % len(levels)]
+        self.state.thinking_level = self.thinking_level
+        return f"Thinking mode: {self.thinking_level}"
 
     async def compact(self, summary: str) -> str:
         self.compact_summaries.append(summary)
@@ -911,6 +927,52 @@ async def test_tui_model_opens_interactive_picker() -> None:
     assert session.provider_name == "local"
     assert session.model == "local-model"
     assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_thinking_command_updates_session() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/thinking high"
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert session.thinking_level == "high"
+    assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_cycles_thinking_from_keybinding() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        await pilot.press("shift+tab")
+        await pilot.pause()
+
+    assert session.thinking_level == "high"
+
+
+@pytest.mark.anyio
+async def test_tui_app_uses_configured_thinking_keybinding() -> None:
+    session = FakeSession()
+    app = TauTuiApp(
+        session,
+        tui_settings=TuiSettings(keybindings=TuiKeybindings(thinking_cycle="f3")),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.press("shift+tab")
+        await pilot.pause()
+        assert session.thinking_level == "medium"
+
+        await pilot.press("f3")
+        await pilot.pause()
+
+    assert session.thinking_level == "high"
 
 
 @pytest.mark.anyio

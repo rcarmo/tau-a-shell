@@ -45,6 +45,7 @@ For the practical frontend contract, see [Building a Custom TUI](../custom-tui.m
 - [Phase 19: Project Context Discovery and Reload](phase-19-context-discovery.md)
 - [Phase 20: Installation and Configuration Docs](phase-20-installation-docs.md)
 - [Phase 20.1: Context Accounting Refresh](phase-20-1-context-accounting.md)
+- [Phase 20.2: Thinking Mode Controls](phase-20-2-thinking-controls.md)
 - [Phase 22: Compaction Replay Foundation](phase-22-compaction-foundation.md)
 
 More pages will be added here as each phase lands.
