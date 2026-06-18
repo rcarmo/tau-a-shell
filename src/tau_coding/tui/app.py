@@ -11,7 +11,7 @@ from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key, Resize
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static, TextArea
 from textual.worker import Worker
 
 from tau_agent.messages import AgentMessage
@@ -99,6 +99,8 @@ class CompletionActionTarget(Protocol):
 
     def action_cycle_thinking(self) -> None: ...
 
+    async def action_submit_prompt(self) -> None: ...
+
 
 class SessionCompletionRecord(Protocol):
     """Session metadata needed to render resume picker completions."""
@@ -109,8 +111,8 @@ class SessionCompletionRecord(Protocol):
     cwd: Path
 
 
-class PromptInput(Input):
-    """Prompt input with completion key bindings."""
+class PromptInput(TextArea):
+    """Multiline prompt input with completion key bindings."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = []
 
@@ -125,6 +127,29 @@ class PromptInput(Input):
         self._bindings = BindingsMap.merge(
             [self._bindings, BindingsMap(_prompt_bindings(self.tui_keybindings))]
         )
+
+    @property
+    def value(self) -> str:
+        """Compatibility alias for tests and code that previously used Input.value."""
+        return self.text
+
+    @value.setter
+    def value(self, text: str) -> None:
+        self.text = text
+
+    @property
+    def cursor_position(self) -> int:
+        """Return a flat cursor offset for Input compatibility."""
+        row, column = self.cursor_location
+        lines = self.text.split("\n")
+        return sum(len(line) + 1 for line in lines[:row]) + column
+
+    @cursor_position.setter
+    def cursor_position(self, offset: int) -> None:
+        text = self.text
+        bounded = max(0, min(offset, len(text)))
+        before = text[:bounded]
+        self.move_cursor((before.count("\n"), len(before.rsplit("\n", 1)[-1])))
 
     def action_accept_completion(self) -> None:
         """Accept the selected app-level completion."""
@@ -163,9 +188,17 @@ class PromptInput(Input):
         self._completion_target().action_completion_previous()
 
     async def on_key(self, event: Key) -> None:
-        """Route completion keys before default input handling."""
+        """Route completion and submission keys before default input handling."""
         keybindings = self.tui_keybindings
-        if event.key == keybindings.accept_completion:
+        if event.key == "enter":
+            event.stop()
+            event.prevent_default()
+            await self._completion_target().action_submit_prompt()
+        elif event.key == "shift+enter":
+            event.stop()
+            event.prevent_default()
+            self.insert("\n")
+        elif event.key == keybindings.accept_completion:
             event.stop()
             self._completion_target().action_accept_completion()
         elif event.key == keybindings.command_palette:
@@ -652,6 +685,8 @@ class TauTuiApp(App[None]):
         border: tall transparent;
         margin: 0 1 1 1;
         padding: 0 1;
+        min-height: 3;
+        max-height: 8;
     }
 
     #prompt:focus {
@@ -880,7 +915,7 @@ class TauTuiApp(App[None]):
                     markup=False,
                 )
                 yield PromptInput(
-                    placeholder="Ask Tau…",
+                    placeholder="Ask Tau…  Enter submits, Shift+Enter inserts a newline",
                     id="prompt",
                     tui_keybindings=self.tui_settings.keybindings,
                 )
@@ -890,7 +925,7 @@ class TauTuiApp(App[None]):
 
     async def on_mount(self) -> None:
         """Focus the prompt when the app starts."""
-        self.query_one(Input).focus()
+        self.query_one(PromptInput).focus()
         self._update_responsive_layout(self.size.width, self.size.height)
         self._refresh()
         self._refresh_completions()
@@ -903,28 +938,27 @@ class TauTuiApp(App[None]):
         """Update responsive chrome when the terminal changes size."""
         self._update_responsive_layout(event.size.width, event.size.height)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Update prompt autocomplete when the input value changes."""
-        if event.input.id != "prompt":
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Update prompt autocomplete when the prompt text changes."""
+        if event.text_area.id != "prompt":
             return
-        self._completion_state = self._build_completion_state(event.value)
+        self._completion_state = self._build_completion_state(event.text_area.text)
         self._refresh_completions()
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle a submitted prompt or slash command."""
-        if event.input.id != "prompt":
-            return
-        raw_text = event.value
+    async def action_submit_prompt(self) -> None:
+        """Submit the current prompt text or slash command."""
+        prompt = self.query_one("#prompt", PromptInput)
+        raw_text = prompt.text
         applied_completion = self._apply_selected_completion(raw_text)
         if applied_completion is not None and applied_completion != raw_text:
-            event.input.value = applied_completion
-            event.input.cursor_position = len(applied_completion)
+            prompt.text = applied_completion
+            prompt.move_cursor(_text_end_location(applied_completion))
             self._completion_state = self._build_completion_state(applied_completion)
             self._refresh_completions()
             return
 
         text = raw_text.strip()
-        event.input.value = ""
+        prompt.text = ""
         self._completion_state = CompletionState()
         self._refresh_completions()
         if not text:
@@ -996,13 +1030,13 @@ class TauTuiApp(App[None]):
         if isinstance(self.screen, LoginProviderPickerScreen | ModelPickerScreen):
             self.screen.action_select_cursor()
             return
-        prompt = self.query_one("#prompt", Input)
-        applied = self._apply_selected_completion(prompt.value)
+        prompt = self.query_one("#prompt", PromptInput)
+        applied = self._apply_selected_completion(prompt.text)
         if applied is None:
             return
-        prompt.value = applied
-        prompt.cursor_position = len(prompt.value)
-        self._completion_state = self._build_completion_state(prompt.value)
+        prompt.text = applied
+        prompt.move_cursor(_text_end_location(applied))
+        self._completion_state = self._build_completion_state(prompt.text)
         self._refresh_completions()
 
     def action_completion_next(self) -> None:
@@ -1027,11 +1061,11 @@ class TauTuiApp(App[None]):
 
     def action_open_command_palette(self) -> None:
         """Open the slash-command palette in the prompt."""
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", PromptInput)
         prompt.focus()
-        prompt.value = "/"
-        prompt.cursor_position = len(prompt.value)
-        self._completion_state = self._build_completion_state(prompt.value)
+        prompt.text = "/"
+        prompt.move_cursor((0, 1))
+        self._completion_state = self._build_completion_state(prompt.text)
         self._refresh_completions()
 
     def action_open_session_picker(self) -> None:
@@ -1413,6 +1447,12 @@ def _prompt_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         Binding(keybindings.completion_previous, "completion_previous", show=False, priority=True),
         Binding(keybindings.quit, "quit", "Quit", priority=True),
     ]
+
+
+def _text_end_location(text: str) -> tuple[int, int]:
+    """Return the TextArea cursor location at the end of text."""
+    line, _, column_text = text.rpartition("\n")
+    return (line.count("\n") + 1 if line else 0, len(column_text))
 
 
 def _format_prompt_error(exc: BaseException, session: CodingSession) -> str:

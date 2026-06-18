@@ -7,7 +7,7 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from textual.containers import VerticalScroll
-from textual.widgets import Input, Label, ListView
+from textual.widgets import Input, Label, ListView, TextArea
 
 from tau_agent import (
     AgentEndEvent,
@@ -344,7 +344,9 @@ async def test_tui_app_mounts_sidebar_and_transcript() -> None:
         transcript = app.query_one("#transcript")
         assert transcript is not None
         assert transcript.min_width == 1
-        assert app.query_one("#prompt") is not None
+        prompt = app.query_one("#prompt")
+        assert isinstance(prompt, TextArea)
+        assert prompt.soft_wrap is True
 
 
 @pytest.mark.anyio
@@ -562,6 +564,30 @@ async def test_tui_app_resume_command_opens_session_picker() -> None:
 
         assert isinstance(app.screen, SessionPickerScreen)
         assert [(item.role, item.text) for item in app.state.items] == [("user", "Earlier")]
+
+
+@pytest.mark.anyio
+async def test_tui_app_submits_multiline_prompt_with_enter() -> None:
+    session = FakeSession(
+        events=[
+            AgentStartEvent(),
+            MessageEndEvent(message=UserMessage(content="first\nsecond")),
+            AgentEndEvent(),
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "first"
+        prompt.cursor_position = len(prompt.value)
+        await pilot.press("shift+enter")
+        prompt.value += "second"
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert session.prompt_texts == ["first\nsecond"]
+    assert prompt.value == ""
 
 
 @pytest.mark.anyio
