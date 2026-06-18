@@ -122,6 +122,8 @@ def test_session_sidebar_renders_session_metadata() -> None:
     assert "session" in output
     assert "context" in output
     assert "12%" in output
+    assert "provider" in output
+    assert "openai" in output
     assert "fake-model" in output
     assert "thinking" in output
     assert "medium" in output
@@ -150,6 +152,7 @@ def test_compact_session_info_renders_sidebar_facts() -> None:
 
     output = console.export_text()
     assert "context 12%" in output
+    assert "provider openai" in output
     assert "model fake-model" in output
     assert "thinking medium" in output
     assert "location /workspace/project" in output

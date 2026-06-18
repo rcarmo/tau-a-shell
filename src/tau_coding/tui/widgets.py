@@ -156,6 +156,7 @@ def render_session_sidebar(
     metadata.add_column(style=theme.completion_description, no_wrap=True)
     metadata.add_column(style=theme.prompt_text)
     metadata.add_row("context", _context_percentage(session))
+    metadata.add_row("provider", session.provider_name)
     metadata.add_row("model", session.model)
     metadata.add_row("thinking", _thinking_level(session))
     metadata.add_row("location", _short_path(session.cwd))
@@ -217,6 +218,7 @@ def render_compact_session_info(
     """Render the session facts needed when the sidebar is hidden."""
     facts = (
         ("context", _context_percentage(session)),
+        ("provider", session.provider_name),
         ("model", session.model),
         ("thinking", _thinking_level(session)),
         ("location", _short_path(session.cwd)),
