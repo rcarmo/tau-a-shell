@@ -252,7 +252,7 @@ class LoginScreen(ModalScreen[str | None]):
         """Compose the provider login prompt."""
         with Vertical(id="login-screen"):
             yield Static(f"Login: {self.provider.display_name}", id="login-title")
-            yield Static(self.provider.api_key_env, id="login-help")
+            yield Static("Paste this provider's API key.", id="login-help")
             yield Input(placeholder="Paste API key", password=True, id="login-api-key")
             yield Static("Enter saves - Escape closes", id="login-footer")
 
@@ -883,8 +883,11 @@ async def run_tui_app(
     startup_message: str | None = None
     try:
         provider = create_model_provider(selection.provider)
-    except RuntimeError as exc:
-        startup_message = f"{exc} Run /login {selection.provider.name} to save an API key."
+    except RuntimeError:
+        startup_message = (
+            "Login required. Run /login to choose a provider, "
+            f"or /login {selection.provider.name} to continue with the current provider."
+        )
         provider = LoginRequiredProvider(startup_message)
     manager = session_manager or SessionManager()
     session: CodingSession | None = None

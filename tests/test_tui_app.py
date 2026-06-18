@@ -898,7 +898,11 @@ async def test_run_tui_app_opens_when_provider_login_is_missing(
     class FakeApp:
         def __init__(self, session: str, **kwargs: object) -> None:
             assert session == "session"
-            assert "Run /login openai" in str(kwargs["startup_message"])
+            message = str(kwargs["startup_message"])
+            assert "Login required. Run /login" in message
+            assert "/login openai" in message
+            assert "OPENAI_API_KEY" not in message
+            assert "environment variable" not in message
 
         async def run_async(self) -> None:
             calls.append("run")
