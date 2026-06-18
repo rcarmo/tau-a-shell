@@ -10,6 +10,9 @@ from tau_ai import (
     AnthropicConfig,
     AnthropicProvider,
     FakeProvider,
+    OpenAICodexConfig,
+    OpenAICodexCredentials,
+    OpenAICodexProvider,
     OpenAICompatibleConfig,
     OpenAICompatibleProvider,
     ProviderErrorEvent,
@@ -307,6 +310,152 @@ async def test_openai_compatible_provider_does_not_retry_non_transient_status() 
     assert len(requests) == 1
     assert isinstance(events[-1], ProviderErrorEvent)
     assert events[-1].data == {"body": "bad request", "attempts": 1}
+
+
+@pytest.mark.anyio
+async def test_openai_codex_provider_formats_request_and_streams_text() -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        payload = loads(request.content)
+        assert payload["model"] == "gpt-5.5"
+        assert payload["store"] is False
+        assert payload["stream"] is True
+        assert payload["instructions"] == "You are Tau."
+        assert payload["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Say hello"}],
+            }
+        ]
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n'
+                'data: {"type":"response.output_text.delta","delta":"lo"}\n\n'
+                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                headers={"X-Test": "enabled"},
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say hello")],
+                tools=[],
+            )
+        )
+
+    assert [event.type for event in events] == [
+        "response_start",
+        "text_delta",
+        "text_delta",
+        "response_end",
+    ]
+    assert isinstance(events[-1], ProviderResponseEndEvent)
+    assert events[-1].message.content == "Hello"
+    assert events[-1].finish_reason == "completed"
+
+    request = requests[0]
+    assert request.url == "https://chatgpt.test/backend-api/codex/responses"
+    assert request.headers["authorization"] == "Bearer access-token"
+    assert request.headers["chatgpt-account-id"] == "account-1"
+    assert request.headers["originator"] == "tau"
+    assert request.headers["openai-beta"] == "responses=experimental"
+    assert request.headers["x-test"] == "enabled"
+
+
+@pytest.mark.anyio
+async def test_openai_codex_provider_streams_tool_calls() -> None:
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    async def executor(arguments: Mapping[str, JSONValue]) -> AgentToolResult:
+        return AgentToolResult(
+            tool_call_id="call-1|fc-1",
+            name="read",
+            ok=True,
+            content=str(arguments),
+        )
+
+    tool = AgentTool(
+        name="read",
+        description="Read a file.",
+        input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+        executor=executor,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = loads(request.content)
+        assert payload["tools"] == [
+            {
+                "type": "function",
+                "name": "read",
+                "description": "Read a file.",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                "strict": None,
+            }
+        ]
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_item.added",'
+                '"item":{"type":"function_call","id":"fc-1","call_id":"call-1","name":"read"}}\n\n'
+                'data: {"type":"response.function_call_arguments.delta","delta":"{\\"path\\":"}\n\n'
+                'data: {"type":"response.function_call_arguments.done",'
+                '"arguments":"{\\"path\\":\\"README.md\\"}"}\n\n'
+                'data: {"type":"response.output_item.done",'
+                '"item":{"type":"function_call","id":"fc-1","call_id":"call-1",'
+                '"name":"read","arguments":"{\\"path\\":\\"README.md\\"}"}}\n\n'
+                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Read README.md")],
+                tools=[tool],
+            )
+        )
+
+    tool_call_events = [event for event in events if isinstance(event, ProviderToolCallEvent)]
+
+    assert tool_call_events == [
+        ProviderToolCallEvent(
+            tool_call=ToolCall(id="call-1|fc-1", name="read", arguments={"path": "README.md"})
+        )
+    ]
+    assert isinstance(events[-1], ProviderResponseEndEvent)
+    assert events[-1].message.tool_calls == [
+        ToolCall(id="call-1|fc-1", name="read", arguments={"path": "README.md"})
+    ]
 
 
 @pytest.mark.anyio

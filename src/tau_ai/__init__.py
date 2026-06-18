@@ -19,6 +19,12 @@ from tau_ai.events import (
     ProviderToolCallEvent,
 )
 from tau_ai.fake import FakeProvider
+from tau_ai.openai_codex import (
+    DEFAULT_OPENAI_CODEX_BASE_URL,
+    OpenAICodexConfig,
+    OpenAICodexCredentials,
+    OpenAICodexProvider,
+)
 from tau_ai.openai_compatible import OpenAICompatibleProvider
 from tau_ai.provider import CancellationToken, ModelProvider
 
@@ -30,8 +36,12 @@ __all__ = [
     "DEFAULT_OPENAI_COMPATIBLE_MAX_RETRIES",
     "DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS",
     "DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
+    "DEFAULT_OPENAI_CODEX_BASE_URL",
     "FakeProvider",
     "ModelProvider",
+    "OpenAICodexConfig",
+    "OpenAICodexCredentials",
+    "OpenAICodexProvider",
     "OpenAICompatibleConfig",
     "OpenAICompatibleProvider",
     "ProviderErrorEvent",
