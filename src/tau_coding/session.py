@@ -374,6 +374,10 @@ class CodingSession:
         entries = await self._config.storage.read_all()
         self._state = SessionState.from_entries(entries, leaf_id=target_id)
         self._harness.replace_messages(self._state.messages)
+        self._harness.config.model = self._state.model or self._config.model
+        self._thinking_level = _state_thinking_level(self._state, self._config.thinking_level)
+        self._sync_thinking_level_to_active_model()
+        self._refresh_runtime_provider()
         if self._config.session_id is not None and self._config.session_manager is not None:
             self._config.session_manager.touch_session(self._config.session_id, model=self.model)
         suffix = " with branch summary" if summary_entry is not None else ""

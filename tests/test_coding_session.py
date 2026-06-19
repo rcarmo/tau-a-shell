@@ -524,6 +524,40 @@ async def test_session_branches_to_previous_entry_without_destroying_history(
 
 
 @pytest.mark.anyio
+async def test_session_branch_restores_model_from_selected_path(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    first_model = ModelChangeEntry(id="model-a", model="first-model")
+    left = MessageEntry(
+        id="left",
+        parent_id="model-a",
+        message=UserMessage(content="Before switch"),
+    )
+    second_model = ModelChangeEntry(
+        id="model-b",
+        parent_id="left",
+        model="second-model",
+    )
+    right = MessageEntry(
+        id="right",
+        parent_id="model-b",
+        message=AssistantMessage(content="After switch"),
+    )
+    await storage.append(first_model)
+    await storage.append(left)
+    await storage.append(second_model)
+    await storage.append(right)
+    await storage.append(LeafEntry(entry_id="right"))
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    assert session.model == "second-model"
+
+    await session.branch_to_entry("left")
+
+    assert session.state.model == "first-model"
+    assert session.model == "first-model"
+
+
+@pytest.mark.anyio
 async def test_session_branch_with_summary_rebuilds_context(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     root = MessageEntry(id="root", message=UserMessage(content="Root"))

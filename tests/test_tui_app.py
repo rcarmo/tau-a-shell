@@ -1458,8 +1458,10 @@ async def test_tui_app_tree_picker_branches_with_summary() -> None:
             "*   - assistant: Right",
         ]
 
-        app.screen.action_cursor_up()
-        app.screen.action_select_with_summary()
+        await pilot.press("up")
+        await pilot.pause()
+        assert tree_list.index == 1
+        await pilot.press("s")
         await pilot.pause()
 
         assert session.tree_branch_requests == [("left", True)]
