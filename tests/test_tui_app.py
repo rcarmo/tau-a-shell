@@ -93,6 +93,7 @@ class FakeSession:
         self.queued_steering_messages: tuple[str, ...] = ()
         self.queued_follow_up_messages: tuple[str, ...] = ()
         self.streaming_behaviors: list[str | None] = []
+        self.cancel_count = 0
 
     def handle_command(self, text: str) -> CommandResult:
         if text == "/help":
@@ -157,6 +158,9 @@ class FakeSession:
         self.messages = ()
         self.context_token_estimate = 0
         return "Started new session: new-session"
+
+    def cancel(self) -> None:
+        self.cancel_count += 1
 
     def queue_update_event(self) -> QueueUpdateEvent:
         return QueueUpdateEvent(
@@ -713,31 +717,32 @@ def test_tui_app_loads_restored_messages_into_display_state() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_animates_prompt_border_while_running() -> None:
+async def test_tui_app_shows_activity_trail_under_prompt_while_running() -> None:
     app = TauTuiApp(FakeSession())
 
     async with app.run_test():
-        prompt = app.query_one("#prompt")
+        trail = app.query_one("#activity-trail")
         status = app.query_one("#status")
 
         assert str(status.render()) == "Ready"
-        assert not prompt.has_class("-agent-working-0")
+        assert trail.display is False
 
         app.adapter.apply(AgentStartEvent())
         app._refresh()
 
         assert str(status.render()) == ""
-        assert prompt.has_class("-agent-working-0")
-
-        app._tick_activity()
-
-        assert prompt.has_class("-agent-working-1")
+        assert trail.display is True
+        assert "•" in str(trail.render())
+        assert str(tui_app._render_activity_trail(10, 0)) != str(
+            tui_app._render_activity_trail(10, 1)
+        )
 
         app.adapter.apply(AgentEndEvent())
         app._refresh()
 
         assert str(status.render()) == "Ready"
-        assert not prompt.has_class("-agent-working-1")
+        assert trail.display is False
+        assert str(trail.render()) == ""
 
 
 @pytest.mark.anyio
@@ -1172,6 +1177,60 @@ async def test_tui_app_command_modal_renders_literal_markup_text() -> None:
         assert isinstance(app.screen, CommandOutputScreen)
         body = app.screen.query_one("#command-output-body")
         assert str(body.render()) == "Available [commands]\n/help"
+
+
+@pytest.mark.anyio
+async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
+    class RunningSession(FakeSession):
+        @property
+        def is_running(self) -> bool:
+            return True
+
+    session = RunningSession()
+    app = TauTuiApp(session)
+    notifications: list[str] = []
+
+    def fake_notify(message: str, **kwargs: object) -> None:
+        del kwargs
+        notifications.append(message)
+
+    app._notify = fake_notify  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        app.adapter.apply(AgentStartEvent())
+        app._refresh()
+
+        await pilot.press("escape")
+
+        assert session.cancel_count == 1
+        assert app.state.running is False
+        assert notifications == ["Cancellation requested."]
+
+
+@pytest.mark.anyio
+async def test_tui_app_new_command_cancels_active_run_and_ignores_late_events() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        app.adapter.apply(AgentStartEvent())
+        app._refresh()
+        old_run_id = app._prompt_run_id
+        prompt = app.query_one("#prompt")
+        prompt.value = "/new"
+
+        await pilot.press("enter")
+
+        assert session.cancel_count == 1
+        assert session.new_session_count == 1
+        assert app._prompt_run_id == old_run_id + 1
+        assert app.state.items == []
+        assert app.state.running is False
+
+        session.events = (MessageEndEvent(message=AssistantMessage(content="late old output")),)
+        await app._run_prompt("old prompt", old_run_id)
+
+        assert app.state.items == []
 
 
 @pytest.mark.anyio

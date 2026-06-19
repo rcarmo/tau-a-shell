@@ -7,6 +7,7 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Protocol, cast
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingsMap
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -70,14 +71,7 @@ from tau_coding.tui.widgets import (
 type BindingEntry = Binding | tuple[str, str] | tuple[str, str, str]
 SIDEBAR_MIN_WIDTH = 96
 SIDEBAR_MIN_HEIGHT = 24
-ACTIVITY_BORDER_CLASSES = (
-    "-agent-working-0",
-    "-agent-working-1",
-    "-agent-working-2",
-    "-agent-working-3",
-    "-agent-working-4",
-    "-agent-working-5",
-)
+ACTIVITY_TRAIL_PERIOD = 80
 
 
 class LoginRequiredProvider:
@@ -271,6 +265,9 @@ class PromptInput(TextArea):
         elif event.key == keybindings.accept_completion:
             event.stop()
             self._completion_target().action_accept_completion()
+        elif event.key == keybindings.cancel:
+            event.stop()
+            self._completion_target().action_cancel()
         elif event.key == keybindings.command_palette:
             event.stop()
             self._completion_target().action_open_command_palette()
@@ -866,28 +863,11 @@ class TauTuiApp(App[None]):
         border: tall $tau-prompt-border;
     }
 
-    #prompt.-agent-working-0 {
-        border: tall #00ff66;
-    }
-
-    #prompt.-agent-working-1 {
-        border: tall #36d399;
-    }
-
-    #prompt.-agent-working-2 {
-        border: tall #22d3ee;
-    }
-
-    #prompt.-agent-working-3 {
-        border: tall #60a5fa;
-    }
-
-    #prompt.-agent-working-4 {
-        border: tall #a78bfa;
-    }
-
-    #prompt.-agent-working-5 {
-        border: tall #f472b6;
+    #activity-trail {
+        height: 1;
+        margin: 0 1 0 1;
+        padding: 0 1;
+        background: $tau-screen-background;
     }
 
     #compact-session-info {
@@ -1119,6 +1099,7 @@ class TauTuiApp(App[None]):
         self.state.load_messages(session.messages)
         self.adapter = TuiEventAdapter(self.state)
         self._prompt_worker: Worker[None] | None = None
+        self._prompt_run_id = 0
         self._completion_state = CompletionState()
         self._activity_frame = 0
         self._activity_timer: Timer | None = None
@@ -1147,6 +1128,7 @@ class TauTuiApp(App[None]):
                     id="prompt",
                     tui_keybindings=self.tui_settings.keybindings,
                 )
+                yield Static("", id="activity-trail")
                 yield CompactSessionInfo(id="compact-session-info")
                 yield Static("", id="autocomplete")
         yield Footer()
@@ -1248,8 +1230,10 @@ class TauTuiApp(App[None]):
 
     def _submit_prompt(self, text: str) -> None:
         """Add a prompt to the transcript and start the agent worker."""
+        self._prompt_run_id += 1
+        run_id = self._prompt_run_id
         self._refresh()
-        self._prompt_worker = self.run_worker(self._run_prompt(text), exclusive=True)
+        self._prompt_worker = self.run_worker(self._run_prompt(text, run_id), exclusive=True)
 
     async def _queue_prompt(
         self,
@@ -1270,25 +1254,52 @@ class TauTuiApp(App[None]):
         else:
             self._notify("Queued steering message.")
 
-    async def _run_prompt(self, text: str) -> None:
+    async def _run_prompt(self, text: str, run_id: int | None = None) -> None:
         """Run one prompt and stream session events into the TUI state."""
+        active_run_id = self._prompt_run_id if run_id is None else run_id
         try:
             async for event in self.session.prompt(text):
+                if active_run_id != self._prompt_run_id:
+                    return
                 self.adapter.apply(event)
                 if isinstance(event, ErrorEvent) and not event.recoverable:
                     _attach_diagnostic_log_path_to_error(self.state, self.session)
                 self._refresh()
         except Exception as exc:  # noqa: BLE001 - surface unexpected worker errors in the TUI
+            if active_run_id != self._prompt_run_id:
+                return
             message = _format_prompt_error(exc, self.session)
             self.state.error = message
             self.state.add_item("error", message)
             self.state.running = False
             self._refresh()
+        finally:
+            if active_run_id == self._prompt_run_id:
+                self._prompt_worker = None
 
     def action_cancel(self) -> None:
         """Cancel the active agent turn."""
-        if self.state.running:
-            self.session.cancel()
+        self._cancel_active_prompt(notify=True)
+
+    def _cancel_active_prompt(self, *, notify: bool) -> None:
+        """Cancel the active prompt worker and ignore any late events from it."""
+        worker = self._prompt_worker
+        is_worker_active = worker is not None and not worker.is_cancelled
+        is_session_running = bool(getattr(self.session, "is_running", False))
+        if not (self.state.running or is_session_running or is_worker_active):
+            return
+
+        self._prompt_run_id += 1
+        cancel = getattr(self.session, "cancel", None)
+        if callable(cancel):
+            cancel()
+        if worker is not None and not worker.is_cancelled:
+            worker.cancel()
+        self._prompt_worker = None
+        self.state.running = False
+        self.state.assistant_buffer = ""
+        self._refresh()
+        if notify:
             self._notify("Cancellation requested.")
 
     def action_accept_completion(self) -> None:
@@ -1429,6 +1440,7 @@ class TauTuiApp(App[None]):
         self._refresh()
 
     async def _new_session(self) -> None:
+        self._cancel_active_prompt(notify=False)
         new_session = getattr(self.session, "new_session", None)
         if new_session is None:
             self._notify("Session manager is not available.")
@@ -1650,28 +1662,28 @@ class TauTuiApp(App[None]):
                 )
             else:
                 self._activity_timer.resume()
-            self._apply_activity_border()
+            self._apply_activity_indicator()
             return
         self._activity_frame = 0
         if self._activity_timer is not None:
             self._activity_timer.pause()
-        self._apply_activity_border()
+        self._apply_activity_indicator()
 
     def _tick_activity(self) -> None:
         if not self.state.running:
             return
-        self._activity_frame = (self._activity_frame + 1) % len(ACTIVITY_BORDER_CLASSES)
-        self._apply_activity_border()
+        self._activity_frame = (self._activity_frame + 1) % ACTIVITY_TRAIL_PERIOD
+        self._apply_activity_indicator()
         status = self.query_one("#status", Static)
         status.update(self._status_text())
 
-    def _apply_activity_border(self) -> None:
-        prompt = self.query_one("#prompt", PromptInput)
-        active_class = (
-            ACTIVITY_BORDER_CLASSES[self._activity_frame] if self.state.running else None
-        )
-        for class_name in ACTIVITY_BORDER_CLASSES:
-            prompt.set_class(class_name == active_class, class_name)
+    def _apply_activity_indicator(self) -> None:
+        trail = self.query_one("#activity-trail", Static)
+        trail.display = self.state.running
+        if not self.state.running:
+            trail.update("")
+            return
+        trail.update(_render_activity_trail(trail.size.width, self._activity_frame))
 
     def _status_text(self) -> str:
         queue_text = _queue_status_text(self.state)
@@ -1705,6 +1717,33 @@ class TauTuiApp(App[None]):
             thinking_levels=getattr(self.session, "available_thinking_levels", ()),
             session_options=_session_options(self.session),
         )
+
+
+def _render_activity_trail(width: int, frame: int) -> Text:
+    """Render a subtle bouncing activity pixel below the prompt."""
+    usable_width = max(2, width)
+    if usable_width == 1:
+        return Text("•", style="#64748b", overflow="crop", no_wrap=True)
+
+    cycle = (usable_width - 1) * 2
+    offset = frame % cycle
+    moving_right = offset < usable_width
+    position = offset if moving_right else cycle - offset
+    tail_positions = (
+        range(max(0, position - 3), position)
+        if moving_right
+        else range(position + 1, min(usable_width, position + 4))
+    )
+
+    chars = [" "] * usable_width
+    for index, tail_position in enumerate(tail_positions):
+        chars[tail_position] = "·" if index < 2 else "∙"
+    chars[position] = "•"
+    trail = Text("".join(chars), style="#334155", overflow="crop", no_wrap=True)
+    for tail_position in tail_positions:
+        trail.stylize("#475569", tail_position, tail_position + 1)
+    trail.stylize("#94a3b8", position, position + 1)
+    return trail
 
 
 def _session_command_registry(session: CodingSession) -> CommandRegistry:
