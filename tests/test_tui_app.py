@@ -180,6 +180,13 @@ class FakeSession:
             follow_up=self.queued_follow_up_messages,
         )
 
+    def pop_latest_follow_up_message(self) -> str | None:
+        if not self.queued_follow_up_messages:
+            return None
+        message = self.queued_follow_up_messages[-1]
+        self.queued_follow_up_messages = self.queued_follow_up_messages[:-1]
+        return message
+
     async def prompt(
         self,
         text: str,
@@ -1824,6 +1831,29 @@ async def test_tui_app_queues_follow_up_prompt_from_keybinding() -> None:
         ]
 
     assert notifications == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_up_arrow_edits_latest_queued_follow_up() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        app.state.running = True
+        session.queued_follow_up_messages = ("first follow-up", "latest follow-up")
+        app._refresh()
+
+        prompt = app.query_one("#prompt", TextArea)
+        prompt.focus()
+        prompt.text = ""
+        prompt.action_completion_previous()
+        await pilot.pause()
+
+        assert prompt.text == "latest follow-up"
+        assert session.queued_follow_up_messages == ("first follow-up",)
+        assert app.state.queued_follow_up == ("first follow-up",)
+        queued_messages = app.query_one("#queued-messages")
+        assert queued_messages.display is True
 
 
 @pytest.mark.anyio

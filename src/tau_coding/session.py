@@ -400,6 +400,11 @@ class CodingSession:
         """Clear queued steering and follow-up messages."""
         return self._harness.clear_queues()
 
+    def pop_latest_follow_up_message(self) -> str | None:
+        """Remove and return the most recently queued follow-up message."""
+        message = self._harness.pop_latest_follow_up()
+        return None if message is None else message.content
+
     def set_model(self, model: str) -> None:
         """Switch the active model for future turns in this process."""
         self._harness.config.model = model

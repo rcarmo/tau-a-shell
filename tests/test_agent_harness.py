@@ -105,6 +105,21 @@ def test_harness_can_clear_queued_messages() -> None:
     assert harness.queue_update_event().follow_up == ()
 
 
+def test_harness_can_pop_latest_follow_up_message() -> None:
+    harness = AgentHarness(
+        AgentHarnessConfig(provider=FakeProvider([]), model="fake", system="You are Tau.")
+    )
+
+    harness.follow_up("First")
+    harness.follow_up("Second")
+    popped = harness.pop_latest_follow_up()
+
+    assert popped == UserMessage(content="Second")
+    assert harness.queue_update_event().follow_up == ("First",)
+    assert harness.pop_latest_follow_up() == UserMessage(content="First")
+    assert harness.pop_latest_follow_up() is None
+
+
 @pytest.mark.anyio
 async def test_subscribed_listeners_receive_events_and_can_unsubscribe() -> None:
     assistant = AssistantMessage(content="Hello")

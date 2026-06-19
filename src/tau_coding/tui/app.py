@@ -132,6 +132,8 @@ class CompletionActionTarget(Protocol):
 
     def action_toggle_thinking(self) -> None: ...
 
+    def action_edit_queued_follow_up(self) -> bool: ...
+
     async def action_submit_prompt(self) -> None: ...
 
     async def action_submit_follow_up(self) -> None: ...
@@ -218,6 +220,8 @@ class PromptInput(TextArea):
         """Select the previous app-level completion or move up in the prompt."""
         if self._has_completion_options():
             self._completion_target().action_completion_previous()
+        elif self._completion_target().action_edit_queued_follow_up():
+            return
         else:
             self.action_cursor_up()
 
@@ -329,10 +333,7 @@ class PromptInput(TextArea):
                 self.action_cursor_down()
         elif event.key == keybindings.completion_previous:
             event.stop()
-            if self._has_completion_options():
-                self._completion_target().action_completion_previous()
-            else:
-                self.action_cursor_up()
+            self.action_completion_previous()
         elif event.key == keybindings.quit:
             event.stop()
             await self.action_quit()
@@ -972,7 +973,7 @@ class TauTuiApp(App[None]):
     #queued-messages {
         height: auto;
         max-height: 8;
-        margin: 0 1 0 1;
+        margin: 0 1 1 1;
         padding: 0 1;
         background: $tau-screen-background;
         color: $tau-muted-text;
@@ -1490,6 +1491,26 @@ class TauTuiApp(App[None]):
             return
         self._completion_state = self._completion_state.select_previous()
         self._refresh_completions()
+
+    def action_edit_queued_follow_up(self) -> bool:
+        """Move the latest queued follow-up back into the prompt for editing."""
+        if not self.state.running:
+            return False
+        prompt = self.query_one("#prompt", PromptInput)
+        if prompt.text.strip():
+            return False
+        pop_follow_up = getattr(self.session, "pop_latest_follow_up_message", None)
+        if not callable(pop_follow_up):
+            return False
+        message = pop_follow_up()
+        if not message:
+            return False
+        prompt.text = message
+        prompt.move_cursor(_text_end_location(message))
+        self._sync_queue_state()
+        self._completion_state = self._build_completion_state(prompt.text)
+        self._refresh()
+        return True
 
     def action_open_command_palette(self) -> None:
         """Open the slash-command palette in the prompt."""

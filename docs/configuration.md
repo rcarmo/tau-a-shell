@@ -292,7 +292,9 @@ Remap the thinking-mode cycle shortcut with the `thinking_cycle` keybinding.
 While the agent is running in the TUI, `Enter` queues the prompt as steering for
 the active run. `Alt-Enter` queues the prompt as a follow-up that waits until the
 active run would otherwise stop. Remap the follow-up shortcut with
-`queue_follow_up`.
+`queue_follow_up`. Press `Up` on an empty prompt while the agent is running to
+edit the most recently queued follow-up; Tau removes it from the queue and puts
+its text back in the prompt.
 
 Thinking controls are model-aware. Tau enables them only when the active
 provider configuration declares supported levels for the active model. Custom

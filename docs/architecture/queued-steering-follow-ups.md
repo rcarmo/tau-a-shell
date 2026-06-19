@@ -43,10 +43,13 @@ The built-in Textual frontend maps:
 
 - `Enter` while running to steering queueing
 - `Alt-Enter` while running to follow-up queueing
+- `Up` on an empty prompt while running to edit the latest queued follow-up
 
-Pending queues are visible in the status line while the run continues. Once a
-queued message is injected, it appears in the transcript as a normal user
-message and the pending count updates.
+Pending queues are visible above the prompt while the run continues. If several
+follow-ups are queued, edit pulls the most recently queued follow-up back into
+the prompt and removes it from the queue. Once a queued message is injected, it
+appears in the transcript as a normal user message and the pending queue display
+updates.
 
 ## Boundary
 
