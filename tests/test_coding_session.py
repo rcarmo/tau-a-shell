@@ -500,6 +500,61 @@ async def test_load_restores_active_leaf_branch(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_session_branches_to_previous_entry_without_destroying_history(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    root = MessageEntry(id="root", message=UserMessage(content="Root"))
+    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
+    right = MessageEntry(id="right", parent_id="root", message=AssistantMessage(content="Right"))
+    await storage.append(root)
+    await storage.append(left)
+    await storage.append(right)
+    await storage.append(LeafEntry(entry_id="right"))
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    result = await session.branch_to_entry("left")
+
+    entries = await storage.read_all()
+    assert result == "Branched session at left."
+    assert session.messages == (UserMessage(content="Root"), AssistantMessage(content="Left"))
+    assert [entry.id for entry in entries if entry.type == "message"] == ["root", "left", "right"]
+    assert isinstance(entries[-1], LeafEntry)
+    assert entries[-1].entry_id == "left"
+
+
+@pytest.mark.anyio
+async def test_session_branch_with_summary_rebuilds_context(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    root = MessageEntry(id="root", message=UserMessage(content="Root"))
+    left = MessageEntry(id="left", parent_id="root", message=AssistantMessage(content="Left"))
+    right = MessageEntry(
+        id="right",
+        parent_id="left",
+        message=UserMessage(content="Abandoned follow-up"),
+    )
+    await storage.append(root)
+    await storage.append(left)
+    await storage.append(right)
+    await storage.append(LeafEntry(entry_id="right"))
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    result = await session.branch_to_entry("root", summarize=True)
+    entries = await storage.read_all()
+    summary = entries[-2]
+
+    assert "with branch summary" in result
+    assert summary.type == "branch_summary"
+    assert summary.parent_id == "root"
+    assert summary.branch_root_id == "root"
+    assert session.messages[0] == UserMessage(content="Root")
+    assert session.messages[1].role == "user"
+    assert isinstance(session.messages[1].content, str)
+    assert "Previous branch summary from root:" in session.messages[1].content
+    assert "Abandoned follow-up" in session.messages[1].content
+
+
+@pytest.mark.anyio
 async def test_continue_persists_only_new_messages(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     await storage.append(MessageEntry(id="user", message=UserMessage(content="Continue me")))

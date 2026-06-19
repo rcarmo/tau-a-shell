@@ -15,6 +15,7 @@ from tau_agent import (
 )
 from tau_agent.messages import AgentMessage, UserMessage
 from tau_agent.session import (
+    BranchSummaryEntry,
     CompactionEntry,
     JsonlSessionStorage,
     LeafEntry,
@@ -25,6 +26,8 @@ from tau_agent.session import (
     SessionStorage,
     ThinkingLevelChangeEntry,
 )
+from tau_agent.session.entries import SessionEntry
+from tau_agent.session.tree import SessionTreeError, path_to_entry
 from tau_agent.tools import AgentTool
 from tau_ai import ModelProvider
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
@@ -97,6 +100,15 @@ class TerminalCommandResult:
     exit_code: int | None
     ok: bool
     added_to_context: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SessionTreeChoice:
+    """One branchable entry in the active session tree."""
+
+    entry_id: str
+    label: str
+    active: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +319,65 @@ class CodingSession:
     def state(self) -> SessionState:
         """Return the last replayed durable session state."""
         return self._state
+
+    async def tree_choices(self) -> tuple[SessionTreeChoice, ...]:
+        """Return branchable session entries for a tree picker."""
+        entries = await self._config.storage.read_all()
+        children: dict[str | None, int] = {}
+        for entry in entries:
+            if entry.type != "leaf":
+                children[entry.parent_id] = children.get(entry.parent_id, 0) + 1
+        return tuple(
+            SessionTreeChoice(
+                entry_id=entry.id,
+                label=_tree_choice_label(
+                    entry,
+                    depth=_entry_depth(entries, entry.id),
+                    children=children,
+                ),
+                active=entry.id == self._state.active_leaf_id,
+            )
+            for entry in entries
+            if _is_branchable_tree_entry(entry)
+        )
+
+    async def branch_to_entry(self, entry_id: str, *, summarize: bool = False) -> str:
+        """Move the active leaf to a previous entry, preserving existing history."""
+        entries = await self._config.storage.read_all()
+        by_id = {entry.id: entry for entry in entries}
+        if entry_id not in by_id:
+            raise ValueError(f"Unknown session entry: {entry_id}")
+        if not _is_branchable_tree_entry(by_id[entry_id]):
+            raise ValueError(f"Session entry cannot be branched from: {entry_id}")
+
+        target_id = entry_id
+        summary_entry: BranchSummaryEntry | None = None
+        if summarize:
+            abandoned_messages = _messages_after_entry_on_active_path(
+                entries,
+                entry_id,
+                self._last_parent_id,
+            )
+            if abandoned_messages:
+                summary_entry = BranchSummaryEntry(
+                    parent_id=entry_id,
+                    branch_root_id=entry_id,
+                    summary=summarize_messages_for_compaction(abandoned_messages),
+                )
+                await self._config.storage.append(summary_entry)
+                target_id = summary_entry.id
+
+        leaf = LeafEntry(parent_id=target_id, entry_id=target_id)
+        await self._config.storage.append(leaf)
+        self._last_parent_id = target_id
+
+        entries = await self._config.storage.read_all()
+        self._state = SessionState.from_entries(entries, leaf_id=target_id)
+        self._harness.replace_messages(self._state.messages)
+        if self._config.session_id is not None and self._config.session_manager is not None:
+            self._config.session_manager.touch_session(self._config.session_id, model=self.model)
+        suffix = " with branch summary" if summary_entry is not None else ""
+        return f"Branched session at {target_id}{suffix}."
 
     @property
     def thinking_level(self) -> ThinkingLevel:
@@ -881,6 +952,91 @@ def _last_parent_id_from_state(state: SessionState) -> str | None:
     if state.entries:
         return state.entries[-1].id
     return None
+
+
+def _is_branchable_tree_entry(entry: SessionEntry) -> bool:
+    return entry.type in {
+        "message",
+        "model_change",
+        "thinking_level_change",
+        "compaction",
+        "branch_summary",
+        "session_info",
+    }
+
+
+def _entry_depth(entries: list[SessionEntry], entry_id: str) -> int:
+    try:
+        return max(0, len(path_to_entry(entries, entry_id)) - 1)
+    except SessionTreeError:
+        return 0
+
+
+def _tree_choice_label(
+    entry: SessionEntry,
+    *,
+    depth: int,
+    children: dict[str | None, int],
+) -> str:
+    prefix = "  " * depth
+    branch_marker = "+" if children.get(entry.id, 0) > 1 else "-"
+    return f"{prefix}{branch_marker} {_tree_entry_title(entry)}"
+
+
+def _tree_entry_title(entry: SessionEntry) -> str:
+    match entry.type:
+        case "message":
+            return f"{entry.message.role}: {_message_text_preview(entry.message)}"
+        case "model_change":
+            return f"model: {entry.model}"
+        case "thinking_level_change":
+            return f"thinking: {entry.thinking_level or 'off'}"
+        case "compaction":
+            return f"compaction: {_short_preview(entry.summary)}"
+        case "branch_summary":
+            return f"branch summary: {_short_preview(entry.summary)}"
+        case "session_info":
+            return f"session: {entry.title or entry.cwd or entry.id}"
+        case _:
+            return entry.type
+
+
+def _message_text_preview(message: AgentMessage) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return _short_preview(content)
+    return _short_preview(str(content))
+
+
+def _short_preview(text: str, *, limit: int = 72) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized or "(empty)"
+    return f"{normalized[: limit - 1]}..."
+
+
+def _messages_after_entry_on_active_path(
+    entries: list[SessionEntry],
+    entry_id: str,
+    active_leaf_id: str | None,
+) -> tuple[AgentMessage, ...]:
+    if active_leaf_id is None:
+        return ()
+    try:
+        active_path = path_to_entry(entries, active_leaf_id)
+    except SessionTreeError:
+        return ()
+    try:
+        target_index = next(
+            index for index, entry in enumerate(active_path) if entry.id == entry_id
+        )
+    except StopIteration:
+        return ()
+    return tuple(
+        entry.message
+        for entry in active_path[target_index + 1 :]
+        if entry.type == "message"
+    )
 
 
 def _state_thinking_level(

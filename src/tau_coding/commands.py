@@ -84,6 +84,7 @@ class CommandResult:
     compact_summary: str | None = None
     resume_session_id: str | None = None
     resume_picker_requested: bool = False
+    tree_picker_requested: bool = False
     login_picker_requested: bool = False
     login_provider: str | None = None
     model_picker_requested: bool = False
@@ -263,6 +264,15 @@ def create_default_command_registry() -> CommandRegistry:
             description="Resume a previous session.",
             handler=_resume_command,
             search_terms=("sessions", "history", "previous"),
+        )
+    )
+    registry.register(
+        SlashCommand(
+            name="tree",
+            usage="/tree",
+            description="Branch from a previous session entry.",
+            handler=_tree_command,
+            search_terms=("branch", "history", "fork"),
         )
     )
     registry.register(
@@ -458,6 +468,12 @@ def _resume_command(context: CommandContext) -> CommandResult:
         handled=True,
         resume_session_id=session_id,
     )
+
+
+def _tree_command(context: CommandContext) -> CommandResult:
+    if context.args:
+        return CommandResult(handled=True, message="Usage: /tree")
+    return CommandResult(handled=True, tree_picker_requested=True)
 
 
 def _name_command(context: CommandContext) -> CommandResult:

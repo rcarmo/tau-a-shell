@@ -27,7 +27,7 @@ from tau_agent import (
 from tau_coding.commands import CommandResult
 from tau_coding.credentials import OAuthCredential
 from tau_coding.provider_config import OpenAICompatibleProviderConfig, ProviderSettings
-from tau_coding.session import ModelChoice, TerminalCommandResult
+from tau_coding.session import ModelChoice, SessionTreeChoice, TerminalCommandResult
 from tau_coding.session_manager import CodingSessionRecord
 from tau_coding.skills import Skill, format_skill_invocation
 from tau_coding.system_prompt import ProjectContextFile
@@ -44,6 +44,7 @@ from tau_coding.tui.app import (
     SessionPickerScreen,
     TauTuiApp,
     ThemePickerScreen,
+    TreePickerScreen,
     _activity_prompt_border_color,
     _terminal_command_prefix_span,
 )
@@ -98,6 +99,7 @@ class FakeSession:
         self.session_manager = None
         self.compact_summaries: list[str] = []
         self.resumed_session_ids: list[str] = []
+        self.tree_branch_requests: list[tuple[str, bool]] = []
         self.new_session_count = 0
         self.prompt_texts: list[str] = []
         self.reload_count = 0
@@ -121,6 +123,8 @@ class FakeSession:
             return CommandResult(handled=True, resume_session_id=text.removeprefix("/resume "))
         if text == "/resume":
             return CommandResult(handled=True, resume_picker_requested=True)
+        if text == "/tree":
+            return CommandResult(handled=True, tree_picker_requested=True)
         if text == "/login":
             return CommandResult(handled=True, login_picker_requested=True)
         if text.startswith("/login "):
@@ -168,6 +172,18 @@ class FakeSession:
         self.messages = (UserMessage(content="Restored prompt"),)
         self.context_token_estimate = 456
         return f"Resumed session: {session_id}"
+
+    async def tree_choices(self) -> tuple[SessionTreeChoice, ...]:
+        return (
+            SessionTreeChoice(entry_id="root", label="- user: Root"),
+            SessionTreeChoice(entry_id="left", label="  - assistant: Left"),
+            SessionTreeChoice(entry_id="right", label="  - assistant: Right", active=True),
+        )
+
+    async def branch_to_entry(self, entry_id: str, *, summarize: bool = False) -> str:
+        self.tree_branch_requests.append((entry_id, summarize))
+        self.messages = (UserMessage(content=f"Branched to {entry_id}"),)
+        return f"Branched session at {entry_id}."
 
     async def new_session(self) -> str:
         self.new_session_count += 1
@@ -1419,6 +1435,37 @@ async def test_tui_app_session_picker_arrow_keys_select_session() -> None:
         await pilot.pause()
 
         assert session.resumed_session_ids == ["session-2"]
+
+
+@pytest.mark.anyio
+async def test_tui_app_tree_picker_branches_with_summary() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/tree"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, TreePickerScreen)
+        tree_list = app.screen.query_one("#tree-picker-list", ListView)
+        assert tree_list.index == 2
+        labels = [str(item.query_one(Label).render()) for item in tree_list.children]
+        assert labels == [
+            "  - user: Root",
+            "    - assistant: Left",
+            "*   - assistant: Right",
+        ]
+
+        app.screen.action_cursor_up()
+        app.screen.action_select_with_summary()
+        await pilot.pause()
+
+        assert session.tree_branch_requests == [("left", True)]
+        assert [(item.role, item.text) for item in app.state.items] == [
+            ("user", "Branched to left"),
+        ]
 
 
 @pytest.mark.anyio

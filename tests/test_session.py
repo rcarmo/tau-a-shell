@@ -4,6 +4,7 @@ import pytest
 
 from tau_agent import AssistantMessage, ToolResultMessage, UserMessage
 from tau_agent.session import (
+    BranchSummaryEntry,
     CompactionEntry,
     CustomEntry,
     JsonlSessionStorage,
@@ -137,6 +138,29 @@ def test_session_state_replays_compaction_as_context_summary() -> None:
     )
     assert state.compaction_entries == (compaction,)
     assert state.context_entry_ids == ("compact", "followup")
+
+
+def test_session_state_replays_branch_summary_as_context_summary() -> None:
+    root = MessageEntry(id="root", message=UserMessage(content="Root"))
+    summary = BranchSummaryEntry(
+        id="branch-summary",
+        parent_id="root",
+        branch_root_id="root",
+        summary="The abandoned branch explored an alternate implementation.",
+    )
+
+    state = SessionState.from_entries([root, summary], leaf_id="branch-summary")
+
+    assert state.messages == (
+        UserMessage(content="Root"),
+        UserMessage(
+            content=(
+                "Previous branch summary from root:\n"
+                "The abandoned branch explored an alternate implementation."
+            )
+        ),
+    )
+    assert state.context_entry_ids == ("root", "branch-summary")
 
 
 def test_path_to_entry_returns_root_to_leaf_branch() -> None:

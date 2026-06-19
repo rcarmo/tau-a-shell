@@ -98,6 +98,18 @@ def test_compact_command_requires_and_returns_summary(tmp_path: Path) -> None:
     assert requested.compact_summary == "Summary of prior work."
 
 
+def test_tree_command_requests_picker(tmp_path: Path) -> None:
+    registry = create_default_command_registry()
+    session = FakeSession(tmp_path)
+
+    result = registry.execute(session, "/tree")
+    with_args = registry.execute(session, "/tree root")
+
+    assert result.handled is True
+    assert result.tree_picker_requested is True
+    assert with_args.message == "Usage: /tree"
+
+
 def test_status_includes_session_details(tmp_path: Path) -> None:
     result = create_default_command_registry().execute(FakeSession(tmp_path), "/status")
 

@@ -210,12 +210,18 @@ Inside the TUI:
 
 ```text
 /resume
+/tree
 /name <new name>
 /status
 ```
 
 `/name <new name>` renames the current indexed session. The new name is shown
 in the `/resume` picker and in session-id completions.
+
+`/tree` opens the current session tree. Select an earlier entry with `Enter` to
+continue from that point while preserving the existing branch. Press `S` instead
+to add a branch summary for the messages left behind before Tau moves the active
+leaf.
 
 ## Skills and Prompt Templates
 

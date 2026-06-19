@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from tau_agent.messages import AgentMessage, UserMessage
 from tau_agent.session.entries import (
+    BranchSummaryEntry,
     CompactionEntry,
     CustomEntry,
     SessionEntry,
@@ -70,7 +71,9 @@ class SessionState:
                     compaction_entries.append(entry)
                     message_rows = _apply_compaction(message_rows, entry)
                 case "branch_summary":
-                    pass
+                    message_rows.append(
+                        (entry.id, UserMessage(content=_format_branch_summary(entry)))
+                    )
 
         return cls(
             messages=tuple(message for _entry_id, message in message_rows),
@@ -102,3 +105,8 @@ def _apply_compaction(
 
 def _format_compaction_summary(summary: str) -> str:
     return f"Previous conversation summary:\n{summary}"
+
+
+def _format_branch_summary(entry: BranchSummaryEntry) -> str:
+    branch_root = entry.branch_root_id or "root"
+    return f"Previous branch summary from {branch_root}:\n{entry.summary}"
