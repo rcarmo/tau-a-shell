@@ -130,8 +130,6 @@ Example:
     "thinking_cycle": "shift+tab",
     "toggle_thinking": "ctrl+t",
     "toggle_tool_results": "ctrl+o",
-    "message_previous": "alt+up",
-    "message_next": "alt+down",
     "copy_message": "ctrl+c",
     "quit": "ctrl+d"
   }
@@ -158,13 +156,9 @@ skills, prompt templates, and context files such as `AGENTS.md`.
 
 The TUI uses Textual's built-in footer to show shortcut hints for prompt
 submission, newlines, command/session pickers, thinking controls, queued
-follow-ups, and copy actions. The visible footer bindings switch when
+follow-ups, and prompt clear actions. The visible footer bindings switch when
 autocomplete is open or an agent turn is running, so the bottom toolbar stays in
 Textual's standard footer instead of using a separate custom hint row.
-
-Use `Alt+Up` / `Alt+Down` to select transcript messages and `Ctrl+C` to copy the
-selected message text. Fine-grained mouse selection inside transcript messages is
-not supported yet.
 
 Assistant Markdown renders fenced code blocks with syntax highlighting when the
 fence language is known. Unknown fence languages fall back to plain code

@@ -132,12 +132,6 @@ class CompletionActionTarget(Protocol):
 
     def action_toggle_thinking(self) -> None: ...
 
-    def action_select_previous_message(self) -> None: ...
-
-    def action_select_next_message(self) -> None: ...
-
-    def action_copy_selected_message(self) -> None: ...
-
     async def action_submit_prompt(self) -> None: ...
 
     async def action_submit_follow_up(self) -> None: ...
@@ -251,23 +245,13 @@ class PromptInput(TextArea):
         """Toggle app-level thinking-token display."""
         self._completion_target().action_toggle_thinking()
 
-    def action_select_previous_message(self) -> None:
-        """Select the previous transcript message."""
-        self._completion_target().action_select_previous_message()
-
-    def action_select_next_message(self) -> None:
-        """Select the next transcript message."""
-        self._completion_target().action_select_next_message()
-
-    def action_copy_selected_message(self) -> None:
-        """Clear the current prompt before falling back to message copy."""
+    def action_clear_prompt(self) -> None:
+        """Clear the current prompt."""
         if self.selected_text:
             return
         if self.text:
             self.text = ""
             self.move_cursor((0, 0))
-            return
-        self._completion_target().action_copy_selected_message()
 
     async def action_submit_follow_up(self) -> None:
         """Submit the prompt as an app-level follow-up."""
@@ -329,12 +313,6 @@ class PromptInput(TextArea):
         elif event.key == keybindings.toggle_thinking:
             event.stop()
             self._completion_target().action_toggle_thinking()
-        elif event.key == keybindings.message_previous:
-            event.stop()
-            self._completion_target().action_select_previous_message()
-        elif event.key == keybindings.message_next:
-            event.stop()
-            self._completion_target().action_select_next_message()
         elif event.key == keybindings.copy_message:
             if self.selected_text:
                 return
@@ -343,8 +321,6 @@ class PromptInput(TextArea):
             if self.text:
                 self.text = ""
                 self.move_cursor((0, 0))
-            else:
-                self._completion_target().action_copy_selected_message()
         elif event.key == keybindings.completion_next:
             event.stop()
             if self._has_completion_options():
@@ -1564,41 +1540,6 @@ class TauTuiApp(App[None]):
         self._refresh()
         self._notify("Thinking tokens shown." if visible else "Thinking tokens hidden.")
 
-    def action_select_previous_message(self) -> None:
-        """Select the previous transcript message for copy operations."""
-        item = self.state.select_previous_item()
-        self._refresh()
-        if item is None:
-            self._notify("No transcript messages.")
-
-    def action_select_next_message(self) -> None:
-        """Select the next transcript message for copy operations."""
-        item = self.state.select_next_item()
-        self._refresh()
-        if item is None:
-            self._notify("No transcript messages.")
-
-    def action_copy_selected_message(self) -> None:
-        """Copy the selected transcript message to the terminal clipboard."""
-        text = self._selected_message_text()
-        if text is None:
-            self._notify("Select a transcript message first.", severity="warning")
-            return
-        try:
-            self.copy_to_clipboard(text)
-        except Exception as exc:  # noqa: BLE001 - terminal clipboard support varies
-            self._notify(f"Could not copy message: {exc}", severity="error")
-            return
-        self._notify("Copied selected message.")
-
-    def _selected_message_text(self) -> str | None:
-        item = self.state.selected_item()
-        if item is None:
-            return None
-        if item.role == "tool" and self.state.show_tool_results and item.tool_result_text:
-            return f"{item.text}\n\n{item.tool_result_text}"
-        return item.text
-
     def _handle_session_picker_result(self, session_id: str | None) -> None:
         if session_id is None:
             return
@@ -2175,9 +2116,7 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         ),
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
-        Binding(keybindings.message_previous, "select_previous_message", "Prev msg"),
-        Binding(keybindings.message_next, "select_next_message", "Next msg"),
-        Binding(keybindings.copy_message, "copy_selected_message", "Copy msg"),
+        Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
         Binding(keybindings.quit, "quit", "Quit"),
     ]
 
@@ -2226,12 +2165,6 @@ def _prompt_bindings(
                 "Tools",
                 priority=True,
             ),
-            Binding(
-                keybindings.copy_message,
-                "copy_selected_message",
-                "Copy",
-                priority=True,
-            ),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     bindings = [
@@ -2242,8 +2175,8 @@ def _prompt_bindings(
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(
             keybindings.copy_message,
-            "copy_selected_message",
-            "Copy",
+            "clear_prompt",
+            "Clear",
             priority=True,
         ),
         Binding(keybindings.quit, "quit", "Quit", priority=True),
@@ -2264,9 +2197,7 @@ def _hidden_prompt_bindings(
         (keybindings.thinking_cycle, "cycle_thinking"),
         (keybindings.toggle_tool_results, "toggle_tool_results"),
         (keybindings.toggle_thinking, "toggle_thinking"),
-        (keybindings.message_previous, "select_previous_message"),
-        (keybindings.message_next, "select_next_message"),
-        (keybindings.copy_message, "copy_selected_message"),
+        (keybindings.copy_message, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
         (keybindings.completion_next, "completion_next"),
         (keybindings.completion_previous, "completion_previous"),

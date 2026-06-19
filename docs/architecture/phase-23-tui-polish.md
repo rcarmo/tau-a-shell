@@ -88,12 +88,6 @@ in the Textual frontend; session metadata and agent state are unchanged.
 When visible, the sidebar includes loaded context files so project instructions
 such as `AGENTS.md` are inspectable without opening a separate command modal.
 
-Transcript text can now be selected through Textual's selection APIs. Message
-selection is also available with `Alt-Up` and `Alt-Down`, and `Ctrl-C` copies
-the selected message text through Textual's terminal clipboard integration.
-This gives users a keyboard path for copying user, assistant, tool, status, and
-error blocks without making selection part of the durable transcript model.
-
 The status line now shows a small animated activity indicator while a run is
 active and resets to `Ready` when the run completes, is cancelled, or fails. It
 also shows pending steering/follow-up queue counts while queued prompts are
@@ -111,15 +105,10 @@ provider, model, queue, and session state.
 
 The Textual footer now carries Tau's shortcut hints through ordinary visible
 bindings. It describes the active submission, newline, picker, thinking,
-follow-up, and copy shortcuts, switches to autocomplete-focused bindings while
+follow-up, and prompt clear shortcuts, switches to autocomplete-focused bindings while
 completions are open, and switches again while an agent turn is running. Tau
 does not add a separate custom hint row; the built-in bottom toolbar remains the
 single shortcut surface.
-
-Transcript message copying uses keyboard-driven message selection. Users can
-move the selected transcript message with `Alt+Up` / `Alt+Down`, then press
-`Ctrl+C` to copy that message. Fine-grained mouse selection inside transcript
-messages needs a larger transcript-widget refactor and is tracked separately.
 
 Assistant code block rendering is now more defensive. Known fence languages use
 Rich/Pygments syntax highlighting, while unknown or custom fence labels fall
@@ -157,23 +146,21 @@ uv run tau
    opening `/resume`. The renamed session should appear in the resume picker and
    in `/resume <session-id>` completions.
 2. Check the working indicator by submitting a prompt that takes a few seconds.
-   The spinner or activity text should appear in the row directly above the
-   prompt while the turn runs, not in the top status line.
+   The prompt border should slowly fade between activity colors while the turn
+   runs, without a separate spinner row above the prompt.
 3. Check shortcut hints in the built-in bottom footer. It should show prompt
-   actions such as submit, newline, commands, sessions, thinking, copy, and
+   actions such as submit, newline, commands, sessions, thinking, clear, and
    quit. Open slash-command autocomplete and confirm the same footer switches to
    complete, choose, and close actions. Submit a prompt that takes a few seconds
-   and confirm the footer switches to steer, follow-up, cancel, thinking, tools,
-   and copy actions. There should not be a second custom shortcut row above the
+   and confirm the footer switches to steer, follow-up, cancel, thinking, and
+   tools actions. There should not be a second custom shortcut row above the
    footer.
-4. Check transcript message copy by using `Alt+Up` or `Alt+Down` to select a
-   message, pressing `Ctrl+C`, and confirming the whole selected message copies.
-5. Check code block rendering by asking the model for one fenced `python` block
+4. Check code block rendering by asking the model for one fenced `python` block
    and one fenced block with an unknown language such as
    `not-a-real-language`. The Python block should be highlighted, and the
    unknown-language block should render as plain code without breaking the
    transcript.
-6. Check the light theme by writing this file:
+5. Check the light theme by writing this file:
 
    ```json
    {

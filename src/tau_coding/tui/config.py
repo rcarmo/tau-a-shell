@@ -26,8 +26,6 @@ class TuiKeybindings:
     thinking_cycle: str = "shift+tab"
     toggle_thinking: str = "ctrl+t"
     toggle_tool_results: str = "ctrl+o"
-    message_previous: str = "alt+up"
-    message_next: str = "alt+down"
     copy_message: str = "ctrl+c"
     quit: str = "ctrl+d"
 
@@ -44,8 +42,6 @@ class TuiKeybindings:
             "thinking_cycle": self.thinking_cycle,
             "toggle_thinking": self.toggle_thinking,
             "toggle_tool_results": self.toggle_tool_results,
-            "message_previous": self.message_previous,
-            "message_next": self.message_next,
             "copy_message": self.copy_message,
             "quit": self.quit,
         }
@@ -261,7 +257,8 @@ def tui_settings_from_json(data: dict[str, Any]) -> TuiSettings:
 def _keybindings_from_json(data: dict[str, Any]) -> TuiKeybindings:
     defaults = TuiKeybindings()
     allowed_fields = set(defaults.to_json())
-    unknown_fields = set(data) - allowed_fields
+    legacy_fields = {"message_previous", "message_next"}
+    unknown_fields = set(data) - allowed_fields - legacy_fields
     if unknown_fields:
         raise TuiConfigError(f"Unknown TUI keybinding: {sorted(unknown_fields)[0]}")
 

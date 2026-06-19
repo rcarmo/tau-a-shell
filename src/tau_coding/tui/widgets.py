@@ -109,7 +109,7 @@ class TranscriptView(RichLog):
         """Redraw the transcript from display state."""
         self._render_state = state
         self._render_theme = theme
-        self._redraw(scroll_end=state.selected_item_index is None)
+        self._redraw(scroll_end=True)
 
     def on_resize(self, event: Resize) -> None:
         """Re-render transcript entries when the terminal width changes."""
@@ -138,7 +138,6 @@ class TranscriptView(RichLog):
                     item,
                     theme=theme,
                     show_tool_results=state.show_tool_results,
-                    selected=index == state.selected_item_index,
                 ),
                 expand=True,
                 shrink=True,
@@ -251,12 +250,9 @@ def render_chat_item(
     *,
     theme: TuiTheme = TAU_DARK_THEME,
     show_tool_results: bool = False,
-    selected: bool = False,
 ) -> RenderableType:
     """Render a chat item as a standalone Toad-inspired transcript block."""
     role_style = _chat_item_role_style(item, theme)
-    if selected:
-        role_style = TuiRoleStyle(border=theme.accent, body=role_style.body)
     body = (
         _render_tool_chat_body(
             item,

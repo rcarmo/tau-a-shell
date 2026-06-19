@@ -60,8 +60,6 @@ def test_load_tui_settings_reads_keybindings(tmp_path: Path) -> None:
     assert settings.keybindings.toggle_thinking == "f4"
     assert settings.keybindings.accept_completion == "f2"
     assert settings.keybindings.thinking_cycle == "f3"
-    assert settings.keybindings.message_previous == "alt+up"
-    assert settings.keybindings.message_next == "alt+down"
     assert settings.keybindings.copy_message == "ctrl+b"
     assert settings.keybindings.cancel == "escape"
     assert settings.theme == "high-contrast"
@@ -75,6 +73,19 @@ def test_save_tui_settings_writes_json(tmp_path: Path) -> None:
 
     assert path == tmp_path / ".tau" / "tui.json"
     assert load_tui_settings(paths).theme == "tau-light"
+
+
+def test_tui_settings_ignores_removed_message_selection_keybindings() -> None:
+    settings = tui_settings_from_json(
+        {
+            "keybindings": {
+                "message_previous": "alt+up",
+                "message_next": "alt+down",
+            }
+        }
+    )
+
+    assert settings == TuiSettings()
 
 
 def test_tui_settings_reject_unknown_fields() -> None:
@@ -128,8 +139,6 @@ def test_tui_keybindings_serialize_to_json() -> None:
     assert settings.to_json()["keybindings"]["toggle_thinking"] == "f4"
     assert settings.to_json()["keybindings"]["accept_completion"] == "f2"
     assert settings.to_json()["keybindings"]["thinking_cycle"] == "f3"
-    assert settings.to_json()["keybindings"]["message_previous"] == "alt+up"
-    assert settings.to_json()["keybindings"]["message_next"] == "alt+down"
     assert settings.to_json()["keybindings"]["copy_message"] == "ctrl+b"
     assert settings.to_json()["theme"] == "high-contrast"
 

@@ -36,7 +36,6 @@ class TuiState:
     show_thinking: bool = False
     queued_steering: tuple[str, ...] = ()
     queued_follow_up: tuple[str, ...] = ()
-    selected_item_index: int | None = None
 
     def add_item(
         self,
@@ -55,8 +54,6 @@ class TuiState:
                 tool_result_text=tool_result_text,
             )
         )
-        if self.selected_item_index is not None:
-            self.selected_item_index = min(self.selected_item_index, len(self.items) - 1)
 
     def add_tool_call(self, tool_call: ToolCall) -> None:
         """Append a collapsed tool-call item."""
@@ -100,15 +97,6 @@ class TuiState:
     def toggle_thinking(self) -> bool:
         """Toggle thinking-token display and return the new state."""
         self.show_thinking = not self.show_thinking
-        if (
-            not self.show_thinking
-            and self.selected_item_index is not None
-            and (
-                not 0 <= self.selected_item_index < len(self.items)
-                or self.items[self.selected_item_index].role == "thinking"
-            )
-        ):
-            self.selected_item_index = None
         return self.show_thinking
 
     def update_queue(self, *, steering: tuple[str, ...], follow_up: tuple[str, ...]) -> None:
@@ -126,7 +114,6 @@ class TuiState:
         self.items.clear()
         self.assistant_buffer = ""
         self.error = None
-        self.selected_item_index = None
 
     def load_messages(self, messages: Iterable[AgentMessage]) -> None:
         """Populate the transcript from restored session messages."""
@@ -150,51 +137,6 @@ class TuiState:
                         error=message.error,
                     )
                 )
-
-    def selected_item(self) -> ChatItem | None:
-        """Return the currently selected transcript item."""
-        if self.selected_item_index is None:
-            return None
-        if not 0 <= self.selected_item_index < len(self.items):
-            self.selected_item_index = None
-            return None
-        if not self._item_is_visible(self.selected_item_index):
-            self.selected_item_index = None
-            return None
-        return self.items[self.selected_item_index]
-
-    def select_next_item(self) -> ChatItem | None:
-        """Move selection toward newer transcript items."""
-        visible_indices = self._visible_item_indices()
-        if not visible_indices:
-            self.selected_item_index = None
-            return None
-        if self.selected_item_index is None or self.selected_item_index not in visible_indices:
-            self.selected_item_index = visible_indices[-1]
-        else:
-            current = visible_indices.index(self.selected_item_index)
-            self.selected_item_index = visible_indices[min(current + 1, len(visible_indices) - 1)]
-        return self.items[self.selected_item_index]
-
-    def select_previous_item(self) -> ChatItem | None:
-        """Move selection toward older transcript items."""
-        visible_indices = self._visible_item_indices()
-        if not visible_indices:
-            self.selected_item_index = None
-            return None
-        if self.selected_item_index is None or self.selected_item_index not in visible_indices:
-            self.selected_item_index = visible_indices[-1]
-        else:
-            current = visible_indices.index(self.selected_item_index)
-            self.selected_item_index = visible_indices[max(current - 1, 0)]
-        return self.items[self.selected_item_index]
-
-    def _visible_item_indices(self) -> list[int]:
-        return [index for index in range(len(self.items)) if self._item_is_visible(index)]
-
-    def _item_is_visible(self, index: int) -> bool:
-        item = self.items[index]
-        return item.role != "thinking" or self.show_thinking
 
 
 def format_tool_call_block(tool_call: ToolCall) -> str:

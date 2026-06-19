@@ -242,8 +242,6 @@ The built-in configurable action names are:
 - `thinking_cycle`
 - `toggle_thinking`
 - `toggle_tool_results`
-- `message_previous`
-- `message_next`
 - `copy_message`
 - `quit`
 
