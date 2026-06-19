@@ -1593,17 +1593,8 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
         await pilot.press("escape")
 
         assert session.cancel_count == 1
-        assert app.state.running is True
-        assert notifications == [
-            "Agent will stop on the next turn. "
-            "Press Esc again to interrupt the current operation."
-        ]
-
-        await pilot.press("escape")
-
-        assert session.cancel_count == 2
         assert app.state.running is False
-        assert notifications[-1] == "Interrupted current operation."
+        assert notifications == ["Interrupted current operation."]
 
 
 @pytest.mark.anyio

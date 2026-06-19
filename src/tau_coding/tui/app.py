@@ -1365,7 +1365,6 @@ class TauTuiApp(App[None]):
         self._activity_frame = 0
         self._activity_timer: Timer | None = None
         self._active_notification_keys: set[tuple[str, str]] = set()
-        self._cancel_pending = False
 
     def get_theme_variable_defaults(self) -> dict[str, str]:
         """Return Tau-specific CSS variables for the selected TUI theme."""
@@ -1508,7 +1507,6 @@ class TauTuiApp(App[None]):
 
     def _submit_prompt(self, text: str) -> None:
         """Add a prompt to the transcript and start the agent worker."""
-        self._cancel_pending = False
         self._prompt_run_id += 1
         run_id = self._prompt_run_id
         self._refresh()
@@ -1582,7 +1580,6 @@ class TauTuiApp(App[None]):
         finally:
             if active_run_id == self._prompt_run_id:
                 self._prompt_worker = None
-                self._cancel_pending = False
 
     def action_cancel(self) -> None:
         """Cancel the active agent turn."""
@@ -1590,32 +1587,20 @@ class TauTuiApp(App[None]):
 
     def _cancel_active_prompt(self, *, notify: bool, interrupt: bool = False) -> None:
         """Cancel the active prompt worker and ignore any late events from it."""
+        del interrupt
         worker = self._prompt_worker
         is_worker_active = worker is not None and not worker.is_cancelled
         is_session_running = bool(getattr(self.session, "is_running", False))
         if not (self.state.running or is_session_running or is_worker_active):
             return
 
-        cancel = getattr(self.session, "cancel", None)
-        if not self._cancel_pending and not interrupt:
-            if callable(cancel):
-                cancel()
-            self._cancel_pending = True
-            self._refresh()
-            if notify:
-                self._notify(
-                    "Agent will stop on the next turn. "
-                    "Press Esc again to interrupt the current operation."
-                )
-            return
-
         self._prompt_run_id += 1
+        cancel = getattr(self.session, "cancel", None)
         if callable(cancel):
             cancel()
         if worker is not None and not worker.is_cancelled:
             worker.cancel()
         self._prompt_worker = None
-        self._cancel_pending = False
         self.state.running = False
         self.state.assistant_buffer = ""
         self._refresh()
