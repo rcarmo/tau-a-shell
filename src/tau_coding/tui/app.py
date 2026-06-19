@@ -73,6 +73,7 @@ type BindingEntry = Binding | tuple[str, str] | tuple[str, str, str]
 SIDEBAR_MIN_WIDTH = 96
 SIDEBAR_MIN_HEIGHT = 24
 ACTIVITY_TRAIL_PERIOD = 80
+ACTIVITY_TICK_SECONDS = 0.4
 ACTIVITY_FRAMES = ("|", "/", "-", "\\")
 
 
@@ -1718,7 +1719,7 @@ class TauTuiApp(App[None]):
         if self.state.running:
             if self._activity_timer is None:
                 self._activity_timer = self.set_interval(
-                    0.2,
+                    ACTIVITY_TICK_SECONDS,
                     self._tick_activity,
                     name="activity-indicator",
                 )

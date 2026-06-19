@@ -842,6 +842,7 @@ async def test_tui_app_shows_activity_indicators_while_running() -> None:
         assert trail.display is True
         assert "•" in str(trail.render())
         assert str(activity.render()) == "working |"
+        assert tui_app.ACTIVITY_TICK_SECONDS == pytest.approx(0.4)
 
         app._tick_activity()
 
