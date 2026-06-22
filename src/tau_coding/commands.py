@@ -55,6 +55,9 @@ class CommandSession(Protocol):
     def auto_compact_token_threshold(self) -> int | None: ...
 
     @property
+    def context_window_tokens(self) -> int: ...
+
+    @property
     def thinking_level(self) -> str: ...
 
     @property
@@ -205,8 +208,8 @@ def create_default_command_registry() -> CommandRegistry:
     registry.register(
         SlashCommand(
             name="compact",
-            usage="/compact <summary>",
-            description="Replace active context with a manual summary.",
+            usage="/compact [instructions]",
+            description="Summarize and compact active context.",
             handler=_compact_command,
         )
     )
@@ -324,11 +327,6 @@ def _new_command(context: CommandContext) -> CommandResult:
 
 
 def _compact_command(context: CommandContext) -> CommandResult:
-    if not context.args:
-        return CommandResult(
-            handled=True,
-            message="Usage: /compact <summary>",
-        )
     return CommandResult(
         handled=True,
         compact_summary=context.args.strip(),
@@ -359,6 +357,7 @@ def _status_command(context: CommandContext) -> CommandResult:
         f"Prompt templates: {len(session.prompt_templates)}",
         f"Context files: {len(session.context_files)}",
         f"Estimated context tokens: {session.context_token_estimate}",
+        f"Context window: {session.context_window_tokens}",
     ]
     if context_usage is not None:
         lines.append(

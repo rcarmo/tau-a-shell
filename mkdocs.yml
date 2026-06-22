@@ -50,6 +50,7 @@ nav:
   - Installation: installation.md
   - Configuration and Files: configuration.md
   - Providers: providers.md
+  - Context Compaction: context-compaction.md
   - Building a Custom TUI: custom-tui.md
   - Agent Loop: agent-loop.md
   - Agent Harness: harness.md

@@ -58,6 +58,8 @@ Tau currently has:
 - Want the big-picture boundaries? Read [Architecture](01-architecture.md).
 - Want the current core model? Read [Core Types and Events](05-core-types-and-events.md).
 - Want to configure model backends? Read [Providers](providers.md).
+- Want to understand long-session context management? Read
+  [Context Compaction](context-compaction.md).
 - Want to understand the execution engine? Read [Agent Loop](agent-loop.md).
 - Want the reusable stateful brain? Read [Agent Harness](harness.md).
 - Want to build another frontend? Read [Building a Custom TUI](custom-tui.md).

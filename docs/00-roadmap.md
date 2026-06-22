@@ -24,6 +24,11 @@ selection/copy, activity status, and Pi-style queued steering/follow-up prompts.
 See [Pre-extension Hardening Summary](architecture/pre-extension-hardening.md)
 for the current behavior and verification coverage.
 
+Context compaction now uses Pi-style model-generated summaries, preserves recent
+context during automatic compaction, and can recover from a context-overflow
+provider error with one compact-and-retry attempt. See
+[Context Compaction](context-compaction.md).
+
 ## Phase plan
 
 0. Project foundation and design docs.

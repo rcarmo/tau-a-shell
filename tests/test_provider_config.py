@@ -50,6 +50,10 @@ def test_builtin_openai_declares_model_scoped_thinking_capabilities() -> None:
     codex = settings.get_provider("openai-codex")
     anthropic = settings.get_provider("anthropic")
 
+    assert openai.context_windows["gpt-5.5"] == 272_000
+    assert openai.context_windows["gpt-5.5-pro"] == 1_050_000
+    assert settings.get_provider("anthropic").context_windows["claude-sonnet-4-6"] == 1_000_000
+    assert openrouter.context_windows["openai/gpt-5.5"] == 1_050_000
     assert provider_thinking_levels(openai, model="gpt-5.5") == (
         "off",
         "low",
@@ -115,6 +119,7 @@ def test_save_and_load_provider_settings_round_trip(tmp_path: Path) -> None:
                 api_key_env="LOCAL_API_KEY",
                 models=("qwen", "llama"),
                 default_model="qwen",
+                context_windows={"qwen": 64_000},
                 headers={"X-Test": "enabled"},
                 timeout_seconds=120,
                 max_retries=2,
@@ -143,6 +148,7 @@ def test_provider_settings_parses_scoped_models() -> None:
                     "api_key_env": "LOCAL_API_KEY",
                     "models": ["qwen", "llama"],
                     "default_model": "qwen",
+                    "context_windows": {"qwen": 64000},
                 }
             ],
             "scoped_models": [
@@ -153,6 +159,7 @@ def test_provider_settings_parses_scoped_models() -> None:
         }
     )
 
+    assert settings.get_provider("local").context_windows == {"qwen": 64000}
     assert settings.scoped_models == (
         ScopedModelConfig(provider="local", model="qwen"),
         ScopedModelConfig(provider="local", model="llama"),
@@ -635,6 +642,7 @@ def test_load_provider_settings_merges_builtin_model_catalog(tmp_path: Path) -> 
     provider = settings.get_provider("huggingface")
     assert provider.default_model == "openai/gpt-oss-120b"
     assert provider.headers == {"X-HF-Bill-To": "my-org"}
+    assert provider.context_windows["openai/gpt-oss-120b"] == 131_072
     assert "Qwen/Qwen3-Coder-480B-A35B-Instruct" in provider.models
     assert "MiniMaxAI/MiniMax-M3" in provider.models
     assert "moonshotai/Kimi-K2.7-Code" in provider.models
@@ -677,6 +685,7 @@ def test_load_provider_settings_restores_builtin_credential_name(
 
     assert isinstance(provider, OpenAICompatibleProviderConfig)
     assert provider.credential_name == "openrouter"
+    assert provider.context_windows["openai/gpt-5.5"] == 1_050_000
     config = openai_compatible_config_from_provider(
         provider,
         credential_reader=FakeCredentials(),

@@ -78,7 +78,7 @@ from tau_coding.session import (
     jsonl_session_storage,
     parse_terminal_command,
 )
-from tau_coding.session_manager import SessionManager
+from tau_coding.session_manager import CodingSessionRecord, SessionManager
 from tau_coding.thinking import DEFAULT_THINKING_LEVEL
 from tau_coding.tui.adapter import TuiEventAdapter
 from tau_coding.tui.autocomplete import CompletionOption, CompletionState, build_completion_state
@@ -1899,7 +1899,12 @@ class TauTuiApp(App[None]):
                 await self._new_session()
             if command.compact_summary is not None:
                 try:
+                    self.state.clear()
+                    self.state.add_item("status", "Compacting session…")
+                    self._refresh()
                     compact_message = await self.session.compact(command.compact_summary)
+                    self.state.clear()
+                    self.state.load_messages(self.session.messages)
                     self._notify(compact_message)
                 except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
                     self._notify(f"Error: {exc}", severity="error")
@@ -3194,7 +3199,7 @@ def _explicit_resume_record(
     manager: SessionManager,
     *,
     session_id: str | None,
-) -> object | None:
+) -> CodingSessionRecord | None:
     if session_id is None:
         return None
     record = manager.get_session(session_id)
@@ -3208,7 +3213,7 @@ def _create_startup_session_record(
     *,
     cwd: Path,
     selection: ProviderSelection,
-) -> object:
+) -> CodingSessionRecord:
     try:
         return manager.create_session(
             cwd=cwd,
@@ -3216,7 +3221,7 @@ def _create_startup_session_record(
             provider_name=selection.provider.name,
         )
     except TypeError:
-        return manager.create_session(cwd=cwd, model=selection.model)  # type: ignore[call-arg]
+        return manager.create_session(cwd=cwd, model=selection.model)
 
 
 def _resolve_tui_startup_selection(

@@ -358,17 +358,25 @@ Thinking mode: <mode>
 Manual compaction is available inside the TUI:
 
 ```text
-/compact <summary>
+/compact [instructions]
 ```
 
-Tau can also compact automatically before a new TUI turn when the estimated
-context exceeds an opt-in threshold:
+Tau asks the active model to generate the summary with Tau's built-in
+compaction prompt. Optional instructions after `/compact` are added as extra
+focus for that prompt.
+
+Tau can also compact automatically before a new TUI turn, after a model
+response, or after a context-overflow error. By default it uses Pi's threshold:
+`model context window - 16384` reserve tokens. Built-in models use configured
+context windows; unknown/custom models fall back to a `128000` token window.
+You can override the threshold for a run:
 
 ```bash
 tau --auto-compact-threshold 100000
 ```
 
-Automatic compaction currently uses a deterministic extractive summary of prior
-messages. It does not call a model to generate the summary yet. Tree-branch
-summaries created with `S` do use the active model first, with deterministic
-summary fallback.
+See [Context Compaction](context-compaction.md) for what Tau counts, when it
+compacts, how much recent context it keeps, and the exact summary prompt.
+
+Tree-branch summaries created with `S` use their own active-model summary path
+with deterministic fallback.

@@ -132,14 +132,16 @@ Existing result fields include:
 - `compact_summary`
 - `message`
 
-If `result.compact_summary` is set, call:
+If `result.compact_summary is not None`, call:
 
 ```python
 message = await session.compact(result.compact_summary)
 ```
 
-Then show the returned status message as transient UI unless the custom
-frontend intentionally wants command status entries in its transcript.
+An empty string means `/compact` was run with no extra instructions and Tau
+should use its built-in compaction prompt as-is. Then show the returned status
+message as transient UI unless the custom frontend intentionally wants command
+status entries in its transcript.
 
 The `/skill:<name> [request]` form is intentionally a prompt-expansion path, so
 it is not consumed by normal command handling. Pass it through to

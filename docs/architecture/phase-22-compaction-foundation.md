@@ -1,7 +1,8 @@
 # Phase 22: Compaction Replay Foundation
 
-This phase starts Tau's compaction and context-management work without adding
-model-driven summarization yet.
+This phase started Tau's compaction and context-management work. It now includes
+model-driven Pi-style summaries, recent-context retention for automatic
+compaction, and overflow-triggered retry behavior.
 
 The implementation lives in:
 
@@ -20,8 +21,9 @@ src/tau_coding/commands.py
 When `SessionState.from_entries()` sees a compaction entry, it:
 
 1. removes message entries whose ids appear in `replaces_entry_ids`
-2. appends one provider-neutral summary message
-3. keeps the original append-only entries intact
+2. inserts one provider-neutral summary message at the first replaced position
+3. keeps any non-replaced recent messages in chronological order
+4. keeps the original append-only entries intact
 
 The summary message currently uses this stable form:
 
@@ -64,32 +66,41 @@ Estimated context tokens: <count>
 This gives automatic compaction thresholds a stable application-layer primitive
 without adding tokenizer policy to `tau_agent`.
 
-Tau also supports an opt-in TUI threshold:
+Tau enables Pi-style automatic compaction by default using:
+
+```text
+model context window - 16384 reserve tokens
+```
+
+Built-in models carry configured context-window metadata, and unknown/custom
+models fall back to a `128000` token window. You can override the threshold for a
+run with:
 
 ```bash
 tau --auto-compact-threshold 100000
 ```
 
-When the active context estimate exceeds this threshold before a new prompt,
-Tau appends a `CompactionEntry` automatically and rebuilds the in-memory
-transcript before sending the prompt to the provider.
+When the active context estimate exceeds the effective threshold before a new prompt or
+after a model response, Tau asks the active provider for a structured summary,
+appends a `CompactionEntry`, and rebuilds the in-memory transcript. Tau also
+attempts one compact-and-retry cycle after provider errors that look like
+context overflow.
 
 ## Manual Compaction
 
-Tau now supports explicit-summary manual compaction in the TUI:
+Tau now supports model-generated manual compaction in the TUI:
 
 ```text
-/compact <summary>
+/compact [instructions]
 ```
 
-The command appends a `CompactionEntry`, appends a new leaf pointer, replays the
-session to rebuild active context, and replaces the in-memory harness transcript
-for future turns.
+The command uses Tau's built-in Pi-style compaction prompt. Optional
+instructions are appended to that prompt as extra focus. The generated summary is
+stored in a `CompactionEntry`, followed by a new leaf pointer. Tau then replays
+the session and replaces the in-memory harness transcript for future turns.
 
-The command deliberately requires a user-provided summary.
-
-Automatic compaction currently uses a deterministic extractive summary of prior
-messages. Model-generated summaries remain future work.
+See [Context Compaction](../context-compaction.md) for the current prompt,
+trigger conditions, and known limitations.
 
 ## Boundary
 
@@ -97,8 +108,8 @@ This foundation is in `tau_agent` because replaying session entries is a
 portable harness concern. It does not know about slash commands, Textual, Rich,
 Tau home paths, token thresholds, or which model creates a summary.
 
-Token estimation and command UX live in `tau_coding`. Model-generated summaries
-belong in later `tau_coding` work.
+Token estimation, summary generation, overflow classification, and command UX
+live in `tau_coding`.
 
 ## Tests
 
@@ -119,6 +130,8 @@ The tests verify:
 - branch replay applies compaction only on the active branch path
 - context-size estimation is deterministic
 - `/status` includes an estimated context token count
-- `/compact <summary>` requests compaction
+- `/compact [instructions]` requests model-generated compaction
 - manual compaction persists entries and rebuilds future-turn context
-- opt-in automatic compaction runs before a prompt when the threshold is exceeded
+- opt-in automatic compaction runs before prompts and after responses when the
+  threshold is exceeded
+- overflow-triggered compaction retries the provider call once when possible

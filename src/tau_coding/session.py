@@ -30,12 +30,19 @@ from tau_agent.session.entries import SessionEntry
 from tau_agent.session.tree import SessionTreeError, path_to_entry
 from tau_agent.tools import AgentTool
 from tau_ai import ModelProvider
+from tau_ai.events import ProviderErrorEvent, ProviderResponseEndEvent, ProviderTextDeltaEvent
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
 from tau_coding.context import discover_project_context_with_diagnostics
 from tau_coding.context_window import (
+    DEFAULT_COMPACTION_KEEP_RECENT_TOKENS,
+    DEFAULT_CONTEXT_WINDOW_TOKENS,
+    SUMMARIZATION_SYSTEM_PROMPT,
     ContextUsageEstimate,
+    auto_compaction_threshold_for_context_window,
+    build_compaction_summary_prompt,
     estimate_context_usage,
+    estimate_message_tokens,
     summarize_messages_for_compaction,
 )
 from tau_coding.credentials import FileCredentialStore, credentials_path
@@ -143,6 +150,14 @@ class SessionResources:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionPlan:
+    """Prepared active-context entries for a compaction run."""
+
+    replace_entry_ids: tuple[str, ...]
+    messages_to_summarize: tuple[AgentMessage, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CodingSessionConfig:
     """Configuration for a persistent coding session."""
 
@@ -163,6 +178,7 @@ class CodingSessionConfig:
     provider_settings: ProviderSettings | None = None
     runtime_provider_config: ProviderConfig | None = None
     auto_compact_token_threshold: int | None = None
+    auto_compact_enabled: bool = True
     thinking_level: ThinkingLevel = DEFAULT_THINKING_LEVEL
 
 
@@ -201,6 +217,7 @@ class CodingSession:
         self._runtime_provider_config = config.runtime_provider_config
         self._resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
         self._auto_compact_token_threshold = config.auto_compact_token_threshold
+        self._auto_compact_enabled = config.auto_compact_enabled
         self._thinking_level = _state_thinking_level(state, config.thinking_level)
         self._owned_providers: list[ClosableModelProvider] = []
         self._diagnostic_logger = AgentCallDiagnosticLogger.from_paths(self._resource_paths.paths)
@@ -508,8 +525,20 @@ class CodingSession:
 
     @property
     def auto_compact_token_threshold(self) -> int | None:
-        """Return the configured automatic compaction threshold, if any."""
-        return self._auto_compact_token_threshold
+        """Return the effective automatic compaction threshold, if any."""
+        if not self._auto_compact_enabled:
+            return None
+        if self._auto_compact_token_threshold is not None:
+            return self._auto_compact_token_threshold
+        return auto_compaction_threshold_for_context_window(self.context_window_tokens)
+
+    @property
+    def context_window_tokens(self) -> int:
+        """Return the active model's configured context window, or Tau's fallback."""
+        provider = self._active_provider_config()
+        if provider is None:
+            return DEFAULT_CONTEXT_WINDOW_TOKENS
+        return provider.context_windows.get(self.model, DEFAULT_CONTEXT_WINDOW_TOKENS)
 
     @property
     def command_registry(self) -> CommandRegistry:
@@ -879,6 +908,7 @@ class CodingSession:
                 provider_settings=self._provider_settings,
                 runtime_provider_config=runtime_provider_config,
                 auto_compact_token_threshold=self._auto_compact_token_threshold,
+                auto_compact_enabled=self._auto_compact_enabled,
                 thinking_level=self._thinking_level,
             )
         )
@@ -896,6 +926,7 @@ class CodingSession:
         self._runtime_provider_config = replacement._runtime_provider_config
         self._resource_paths = replacement._resource_paths
         self._auto_compact_token_threshold = replacement._auto_compact_token_threshold
+        self._auto_compact_enabled = replacement._auto_compact_enabled
         self._thinking_level = replacement._thinking_level
         return f"Resumed session: {record.id}"
 
@@ -953,15 +984,21 @@ class CodingSession:
         self._runtime_provider_config = replacement._runtime_provider_config
         self._resource_paths = replacement._resource_paths
         self._auto_compact_token_threshold = replacement._auto_compact_token_threshold
+        self._auto_compact_enabled = replacement._auto_compact_enabled
         self._thinking_level = replacement._thinking_level
         return f"Started new session: {record.id}"
 
-    async def compact(self, summary: str) -> str:
-        """Append a manual compaction summary and rebuild active context."""
-        normalized_summary = summary.strip()
-        if not normalized_summary:
-            raise ValueError("Compaction summary cannot be empty")
-        compaction = await self._append_compaction(normalized_summary)
+    async def compact(self, instructions: str | None = None) -> str:
+        """Generate a manual compaction summary and rebuild active context."""
+        plan = self._manual_compaction_plan()
+        summary = await self._generate_compaction_summary(
+            plan.messages_to_summarize,
+            custom_instructions=instructions,
+        )
+        compaction = await self._append_compaction(
+            summary,
+            replace_entry_ids=plan.replace_entry_ids,
+        )
         return f"Compacted {len(compaction.replaces_entry_ids)} context entries."
 
     async def aclose(self) -> None:
@@ -1052,16 +1089,9 @@ class CodingSession:
                 "CodingSession is already running; pass streaming_behavior to queue a message."
             )
 
-        try:
-            await self._maybe_auto_compact()
-        except Exception as exc:
-            self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
-                context=context,
-                phase="auto_compact",
-                exc=exc,
-            )
-            raise
+        await self._try_auto_compact(context=context, phase="auto_compact_before_prompt")
         before_count = len(self._harness.messages)
+        overflow_event: ErrorEvent | None = None
         try:
             async for event in self._harness.prompt(expanded_content):
                 if isinstance(event, ErrorEvent) and not event.recoverable:
@@ -1070,8 +1100,28 @@ class CodingSession:
                         phase="agent_loop",
                         event=event,
                     )
+                    if _is_context_overflow_error(event):
+                        overflow_event = event
                 yield event
+            if overflow_event is not None:
+                await self._persist_new_messages(before_count)
+                compacted = await self._try_overflow_compact(context=context)
+                if compacted:
+                    retry_before_count = len(self._harness.messages)
+                    async for retry_event in self._harness.continue_():
+                        if isinstance(retry_event, ErrorEvent) and not retry_event.recoverable:
+                            self._last_diagnostic_log_path = (
+                                self._diagnostic_logger.log_error_event(
+                                    context=context,
+                                    phase="agent_loop_retry",
+                                    event=retry_event,
+                                )
+                            )
+                        yield retry_event
+                    await self._persist_new_messages(retry_before_count)
+                return
             await self._persist_new_messages(before_count)
+            await self._try_auto_compact(context=context, phase="auto_compact_after_prompt")
         except Exception as exc:
             self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
                 context=context,
@@ -1094,6 +1144,7 @@ class CodingSession:
                     )
                 yield event
             await self._persist_new_messages(before_count)
+            await self._try_auto_compact(context=context, phase="auto_compact_after_continue")
         except Exception as exc:
             self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
                 context=context,
@@ -1133,6 +1184,42 @@ class CodingSession:
                 provider_name=self.provider_name,
             )
 
+    async def _try_auto_compact(
+        self,
+        *,
+        context: AgentCallDiagnosticContext,
+        phase: str,
+    ) -> bool:
+        try:
+            return await self._maybe_auto_compact()
+        except Exception as exc:  # noqa: BLE001 - automatic compaction must not lose a turn
+            self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
+                context=context,
+                phase=phase,
+                exc=exc,
+            )
+            return False
+
+    async def _try_overflow_compact(
+        self,
+        *,
+        context: AgentCallDiagnosticContext,
+    ) -> bool:
+        try:
+            plan = self._recent_preserving_compaction_plan()
+            if plan is None:
+                return False
+            summary = await self._generate_compaction_summary(plan.messages_to_summarize)
+            await self._append_compaction(summary, replace_entry_ids=plan.replace_entry_ids)
+            return True
+        except Exception as exc:  # noqa: BLE001 - the original overflow remains visible
+            self._last_diagnostic_log_path = self._diagnostic_logger.log_exception(
+                context=context,
+                phase="overflow_compact",
+                exc=exc,
+            )
+            return False
+
     def _provider_is_usable(self, provider: ProviderConfig) -> bool:
         return provider_has_usable_credentials(
             provider,
@@ -1148,16 +1235,52 @@ class CodingSession:
             if self._provider_is_usable(provider)
         )
 
-    async def _maybe_auto_compact(self) -> None:
-        threshold = self._auto_compact_token_threshold
+    async def _maybe_auto_compact(self) -> bool:
+        threshold = self.auto_compact_token_threshold
         if threshold is None or threshold <= 0:
-            return
+            return False
         if len(self._state.context_entry_ids) < 2:
-            return
+            return False
         if self.context_token_estimate <= threshold:
-            return
-        summary = summarize_messages_for_compaction(self._state.messages)
-        await self._append_compaction(summary)
+            return False
+        plan = self._recent_preserving_compaction_plan()
+        if plan is None:
+            return False
+        summary = await self._generate_compaction_summary(plan.messages_to_summarize)
+        await self._append_compaction(summary, replace_entry_ids=plan.replace_entry_ids)
+        return True
+
+    async def _generate_compaction_summary(
+        self,
+        messages: tuple[AgentMessage, ...],
+        *,
+        custom_instructions: str | None = None,
+    ) -> str:
+        prompt = build_compaction_summary_prompt(
+            messages,
+            custom_instructions=custom_instructions,
+        )
+        text_parts: list[str] = []
+        final_text: str | None = None
+        summary_messages: list[AgentMessage] = [UserMessage(content=prompt)]
+        async for event in self._harness.config.provider.stream_response(
+            model=self.model,
+            system=SUMMARIZATION_SYSTEM_PROMPT,
+            messages=summary_messages,
+            tools=[],
+        ):
+            if isinstance(event, ProviderTextDeltaEvent):
+                text_parts.append(event.delta)
+            elif isinstance(event, ProviderResponseEndEvent):
+                final_text = event.message.content
+            elif isinstance(event, ProviderErrorEvent):
+                details = f": {event.data}" if event.data is not None else ""
+                raise RuntimeError(f"Compaction summarization failed: {event.message}{details}")
+
+        summary = (final_text if final_text is not None else "".join(text_parts)).strip()
+        if not summary:
+            raise RuntimeError("Compaction summarization returned an empty summary")
+        return summary
 
     async def _summarize_branch_messages(
         self,
@@ -1178,14 +1301,51 @@ class CodingSession:
             summary = None
         return summary or summarize_messages_for_compaction(messages)
 
-    async def _append_compaction(self, summary: str) -> CompactionEntry:
-        if not self._state.context_entry_ids:
+    def _manual_compaction_plan(self) -> CompactionPlan:
+        rows = self._active_context_rows()
+        if not rows:
+            raise ValueError("No active context messages to compact")
+        return CompactionPlan(
+            replace_entry_ids=tuple(entry_id for entry_id, _message in rows),
+            messages_to_summarize=tuple(message for _entry_id, message in rows),
+        )
+
+    def _recent_preserving_compaction_plan(self) -> CompactionPlan | None:
+        rows = self._active_context_rows()
+        if len(rows) < 2:
+            return None
+
+        first_kept_index = _first_recent_context_index(
+            rows,
+            keep_recent_tokens=DEFAULT_COMPACTION_KEEP_RECENT_TOKENS,
+        )
+        if first_kept_index <= 0:
+            return None
+
+        replaced = rows[:first_kept_index]
+        if not replaced:
+            return None
+        return CompactionPlan(
+            replace_entry_ids=tuple(entry_id for entry_id, _message in replaced),
+            messages_to_summarize=tuple(message for _entry_id, message in replaced),
+        )
+
+    def _active_context_rows(self) -> tuple[tuple[str, AgentMessage], ...]:
+        return tuple(zip(self._state.context_entry_ids, self._state.messages, strict=True))
+
+    async def _append_compaction(
+        self,
+        summary: str,
+        *,
+        replace_entry_ids: tuple[str, ...],
+    ) -> CompactionEntry:
+        if not replace_entry_ids:
             raise ValueError("No active context messages to compact")
 
         compaction = CompactionEntry(
             parent_id=self._last_parent_id,
             summary=summary,
-            replaces_entry_ids=list(self._state.context_entry_ids),
+            replaces_entry_ids=list(replace_entry_ids),
         )
         await self._config.storage.append(compaction)
         leaf = LeafEntry(parent_id=compaction.id, entry_id=compaction.id)
@@ -1202,6 +1362,76 @@ class CodingSession:
                 provider_name=self.provider_name,
             )
         return compaction
+
+
+def _first_recent_context_index(
+    rows: tuple[tuple[str, AgentMessage], ...],
+    *,
+    keep_recent_tokens: int,
+) -> int:
+    if keep_recent_tokens <= 0:
+        return len(rows)
+
+    accumulated_tokens = 0
+    candidate_index: int | None = None
+    for index in range(len(rows) - 1, -1, -1):
+        _entry_id, message = rows[index]
+        accumulated_tokens += estimate_message_tokens(message)
+        if accumulated_tokens >= keep_recent_tokens:
+            candidate_index = index
+            break
+
+    if candidate_index is None:
+        return 0
+
+    candidate_message = rows[candidate_index][1]
+    if candidate_message.role == "user":
+        if candidate_index > 0:
+            return candidate_index
+        next_user_index = _next_user_message_index(rows, start=1)
+        return next_user_index if next_user_index is not None else 0
+
+    next_user_index = _next_user_message_index(rows, start=candidate_index + 1)
+    if next_user_index is not None:
+        return next_user_index
+
+    for index in range(candidate_index, len(rows)):
+        if rows[index][1].role != "tool":
+            return index
+    return len(rows)
+
+
+def _next_user_message_index(
+    rows: tuple[tuple[str, AgentMessage], ...],
+    *,
+    start: int,
+) -> int | None:
+    for index in range(start, len(rows)):
+        if rows[index][1].role == "user":
+            return index
+    return None
+
+
+def _is_context_overflow_error(event: ErrorEvent) -> bool:
+    text = event.message
+    if event.data is not None:
+        text = f"{text} {event.data}"
+    normalized = text.lower()
+    markers = (
+        "context length",
+        "context window",
+        "context limit",
+        "maximum context",
+        "max context",
+        "input is too long",
+        "input length",
+        "prompt is too long",
+        "too many tokens",
+        "token limit",
+        "exceeds the limit",
+        "exceeded the limit",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def _last_parent_id_from_state(state: SessionState) -> str | None:

@@ -106,12 +106,20 @@ def _apply_compaction(
     entry: CompactionEntry,
 ) -> list[tuple[str, AgentMessage]]:
     replaced_ids = set(entry.replaces_entry_ids)
-    retained = [
-        (entry_id, message)
-        for entry_id, message in message_rows
-        if entry_id not in replaced_ids
-    ]
-    retained.append((entry.id, UserMessage(content=_format_compaction_summary(entry.summary))))
+    retained: list[tuple[str, AgentMessage]] = []
+    inserted_summary = False
+    for entry_id, message in message_rows:
+        if entry_id not in replaced_ids:
+            retained.append((entry_id, message))
+            continue
+        if not inserted_summary:
+            retained.append(
+                (entry.id, UserMessage(content=_format_compaction_summary(entry.summary)))
+            )
+            inserted_summary = True
+
+    if not inserted_summary:
+        retained.append((entry.id, UserMessage(content=_format_compaction_summary(entry.summary))))
     return retained
 
 

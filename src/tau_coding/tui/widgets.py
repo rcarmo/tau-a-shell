@@ -86,6 +86,9 @@ class SessionSummarySource(Protocol):
     def auto_compact_token_threshold(self) -> int | None: ...
 
     @property
+    def context_window_tokens(self) -> int: ...
+
+    @property
     def thinking_level(self) -> str: ...
 
 
@@ -863,6 +866,10 @@ def _visible_chat_text(item: ChatItem, *, show_tool_results: bool) -> str:
         if show_tool_results and item.tool_result_text:
             return f"**Branch Summary**\n\n{item.tool_result_text}"
         return item.text
+    if item.role == "compaction_summary":
+        if show_tool_results and item.tool_result_text:
+            return f"**Compaction Summary**\n\n{item.tool_result_text}"
+        return item.text
     if item.role != "tool" or not show_tool_results or not item.tool_result_text:
         return item.text
     return f"{item.text}\n\n{item.tool_result_text}"
@@ -1045,7 +1052,10 @@ def _plain_text(text: str, *, body_style: str) -> Text:
 def _context_usage(session: SessionSummarySource) -> str:
     threshold = session.auto_compact_token_threshold
     if threshold is None or threshold <= 0:
-        return f"{_compact_token_count(session.context_token_estimate)} context"
+        return (
+            f"{_compact_token_count(session.context_token_estimate)}"
+            f"/{_compact_token_count(session.context_window_tokens)} context"
+        )
     return (
         f"{_compact_token_count(session.context_token_estimate)}"
         f"/{_compact_token_count(threshold)} context"

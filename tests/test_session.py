@@ -140,6 +140,42 @@ def test_session_state_replays_compaction_as_context_summary() -> None:
     assert state.context_entry_ids == ("compact", "followup")
 
 
+def test_session_state_inserts_partial_compaction_before_retained_messages() -> None:
+    old_user = MessageEntry(id="old-user", message=UserMessage(content="Old request"))
+    old_assistant = MessageEntry(
+        id="old-assistant",
+        parent_id="old-user",
+        message=AssistantMessage(content="Old answer"),
+    )
+    recent_user = MessageEntry(
+        id="recent-user",
+        parent_id="old-assistant",
+        message=UserMessage(content="Recent request"),
+    )
+    recent_assistant = MessageEntry(
+        id="recent-assistant",
+        parent_id="recent-user",
+        message=AssistantMessage(content="Recent answer"),
+    )
+    compaction = CompactionEntry(
+        id="compact",
+        parent_id="recent-assistant",
+        summary="Older work was summarized.",
+        replaces_entry_ids=["old-user", "old-assistant"],
+    )
+
+    state = SessionState.from_entries(
+        [old_user, old_assistant, recent_user, recent_assistant, compaction]
+    )
+
+    assert state.messages == (
+        UserMessage(content="Previous conversation summary:\nOlder work was summarized."),
+        UserMessage(content="Recent request"),
+        AssistantMessage(content="Recent answer"),
+    )
+    assert state.context_entry_ids == ("compact", "recent-user", "recent-assistant")
+
+
 def test_session_state_replays_branch_summary_as_context_summary() -> None:
     root = MessageEntry(id="root", message=UserMessage(content="Root"))
     summary = BranchSummaryEntry(

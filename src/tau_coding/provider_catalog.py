@@ -21,6 +21,7 @@ class ProviderCatalogEntry:
     models: tuple[str, ...]
     default_model: str
     docs_url: str
+    context_windows: dict[str, int] | None = None
     thinking_levels: tuple[ThinkingLevel, ...] | None = None
     thinking_models: tuple[str, ...] = ()
     thinking_default: ThinkingLevel | None = None
@@ -50,6 +51,19 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         ),
         default_model="gpt-5.5",
         docs_url="https://platform.openai.com/docs",
+        context_windows={
+            "gpt-5.5": 272_000,
+            "gpt-5.5-pro": 1_050_000,
+            "gpt-5.4": 272_000,
+            "gpt-5.4-mini": 400_000,
+            "gpt-5.3-codex": 400_000,
+            "gpt-5.2": 400_000,
+            "gpt-5.1": 400_000,
+            "gpt-5": 400_000,
+            "gpt-5-mini": 400_000,
+            "gpt-4.1": 1_047_576,
+            "gpt-4.1-mini": 1_047_576,
+        },
         thinking_levels=("off", "low", "medium", "high", "xhigh"),
         thinking_models=(
             "gpt-5.5",
@@ -82,6 +96,14 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         ),
         default_model="gpt-5.5",
         docs_url="https://chatgpt.com/codex",
+        context_windows={
+            "gpt-5.5": 272_000,
+            "gpt-5.4": 272_000,
+            "gpt-5.4-mini": 400_000,
+            "gpt-5.3-codex": 400_000,
+            "gpt-5.3-codex-spark": 400_000,
+            "gpt-5.2": 400_000,
+        },
         thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
         thinking_models=(
             "gpt-5.5",
@@ -108,6 +130,11 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         ),
         default_model="claude-sonnet-4-6",
         docs_url="https://docs.anthropic.com",
+        context_windows={
+            "claude-sonnet-4-6": 1_000_000,
+            "claude-opus-4-8": 200_000,
+            "claude-haiku-4-5": 200_000,
+        },
         thinking_levels=("off", "minimal", "low", "medium", "high", "xhigh"),
         thinking_models=(
             "claude-sonnet-4-6",
@@ -145,6 +172,14 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         ),
         default_model="openai/gpt-5.5",
         docs_url="https://openrouter.ai/docs",
+        context_windows={
+            "openai/gpt-5.5": 1_050_000,
+            "openai/gpt-5.4": 1_050_000,
+            "openai/gpt-5.3-codex": 400_000,
+            "anthropic/claude-sonnet-4.6": 1_000_000,
+            "qwen/qwen3-coder-plus": 1_000_000,
+            "mistralai/codestral-2508": 256_000,
+        },
         thinking_levels=("off", "low", "medium", "high", "xhigh"),
         thinking_models=(
             "openai/gpt-5.5",
@@ -183,6 +218,11 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         ),
         default_model="openai/gpt-oss-120b",
         docs_url="https://huggingface.co/inference/get-started",
+        context_windows={
+            "openai/gpt-oss-120b": 131_072,
+            "openai/gpt-oss-20b": 131_072,
+            "Qwen/Qwen3-Coder-480B-A35B-Instruct": 262_144,
+        },
         thinking_levels=("low", "medium", "high"),
         thinking_models=(
             "openai/gpt-oss-120b",

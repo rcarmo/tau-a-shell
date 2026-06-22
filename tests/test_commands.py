@@ -37,6 +37,7 @@ class FakeSession:
         )
         self.context_token_estimate = 123
         self.auto_compact_token_threshold = 200
+        self.context_window_tokens = 584
         self.thinking_level = "medium"
         self.available_thinking_levels = ("off", "minimal", "low", "medium", "high", "xhigh")
         self.thinking_unavailable_reason: str | None = None
@@ -121,14 +122,14 @@ def test_quit_and_new_return_control_flags(tmp_path: Path) -> None:
     assert registry.execute(session, "/clear").message == "Unknown command: /clear"
 
 
-def test_compact_command_requires_and_returns_summary(tmp_path: Path) -> None:
+def test_compact_command_accepts_optional_instructions(tmp_path: Path) -> None:
     registry = create_default_command_registry()
     session = FakeSession(tmp_path)
 
-    missing = registry.execute(session, "/compact")
+    default = registry.execute(session, "/compact")
     requested = registry.execute(session, "/compact Summary of prior work.")
 
-    assert missing.message == "Usage: /compact <summary>"
+    assert default.compact_summary == ""
     assert requested.compact_summary == "Summary of prior work."
 
 
@@ -174,6 +175,7 @@ def test_session_command_includes_session_details(tmp_path: Path) -> None:
     assert "Skills: 1" in result.message
     assert "Context files: 1" in result.message
     assert "Estimated context tokens: 123" in result.message
+    assert "Context window: 584" in result.message
     assert "Thinking mode: medium" in result.message
     assert "Auto compact threshold: 200" in result.message
     assert "Resource diagnostics: 0" in result.message

@@ -27,6 +27,7 @@ from tau_ai import (
     CancellationToken,
     FakeProvider,
     ModelProvider,
+    ProviderErrorEvent,
     ProviderEvent,
     ProviderResponseEndEvent,
     ProviderResponseStartEvent,
@@ -340,7 +341,11 @@ async def test_context_usage_recalculates_after_prompt_and_compaction(tmp_path: 
                 ProviderResponseEndEvent(
                     message=AssistantMessage(content="Long answer " * 80),
                 ),
-            ]
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="Short summary")),
+            ],
         ]
     )
     session = await CodingSession.load(_config(tmp_path, provider, storage))
@@ -1247,6 +1252,12 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
             ],
             [
                 ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(content="Generated session summary")
+                ),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
                 ProviderResponseEndEvent(message=AssistantMessage(content="Next answer")),
             ],
         ]
@@ -1259,7 +1270,7 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
         entry.id for entry in await storage.read_all() if entry.type == "message"
     ]
 
-    result = await session.compact("The user asked about sessions and got an explanation.")
+    result = await session.compact("Focus on session persistence.")
     entries_after_compact = await storage.read_all()
     compactions = [entry for entry in entries_after_compact if entry.type == "compaction"]
     leaves = [entry for entry in entries_after_compact if entry.type == "leaf"]
@@ -1269,24 +1280,23 @@ async def test_session_compact_persists_summary_and_rebuilds_context(tmp_path: P
     assert result == f"Compacted {message_count_before} context entries."
     assert len(compactions) == 1
     assert isinstance(compactions[0], CompactionEntry)
+    assert compactions[0].summary == "Generated session summary"
     assert compactions[0].replaces_entry_ids == message_entries_before
     assert leaves[-1].entry_id == compactions[0].id
-    assert provider.calls[1][2] == [
-        UserMessage(
-            content=(
-                "Previous conversation summary:\n"
-                "The user asked about sessions and got an explanation."
-            )
-        ),
+    assert provider.calls[1][1].startswith("You are a context summarization assistant.")
+    assert "Additional focus: Focus on session persistence." in provider.calls[1][2][0].content
+    assert provider.calls[2][2] == [
+        UserMessage(content=("Previous conversation summary:\nGenerated session summary")),
         UserMessage(content="Continue."),
     ]
 
 
 @pytest.mark.anyio
-async def test_session_auto_compacts_before_prompt_when_threshold_is_exceeded(
+async def test_session_auto_compacts_after_response_when_threshold_is_exceeded(
     tmp_path: Path,
 ) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    large_prompt = "Explain sessions.\n" + ("old context " * 12_000)
     provider = FakeProvider(
         [
             [
@@ -1296,6 +1306,16 @@ async def test_session_auto_compacts_before_prompt_when_threshold_is_exceeded(
             [
                 ProviderResponseStartEvent(model="fake"),
                 ProviderResponseEndEvent(message=AssistantMessage(content="Second answer")),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(content="Generated automatic summary")
+                ),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="Third answer")),
             ],
         ]
     )
@@ -1309,20 +1329,133 @@ async def test_session_auto_compacts_before_prompt_when_threshold_is_exceeded(
             auto_compact_token_threshold=1,
         )
     )
-    _first_events = await _collect_session_events(session.prompt("Explain sessions."))
+    _first_events = await _collect_session_events(session.prompt(large_prompt))
 
     _second_events = await _collect_session_events(session.prompt("Continue."))
+    _third_events = await _collect_session_events(session.prompt("Next."))
 
     entries = await storage.read_all()
     compactions = [entry for entry in entries if entry.type == "compaction"]
 
     assert len(compactions) == 1
-    assert "Automatically compacted 2 prior message(s)." in compactions[0].summary
-    assert "user: Explain sessions." in compactions[0].summary
-    assert "assistant: First answer" in compactions[0].summary
-    assert provider.calls[1][2] == [
+    assert compactions[0].summary == "Generated automatic summary"
+    assert "Explain sessions." in provider.calls[2][2][0].content
+    assert provider.calls[3][2] == [
         UserMessage(content=f"Previous conversation summary:\n{compactions[0].summary}"),
         UserMessage(content="Continue."),
+        AssistantMessage(content="Second answer"),
+        UserMessage(content="Next."),
+    ]
+
+
+@pytest.mark.anyio
+async def test_session_auto_compacts_with_pi_style_default_threshold(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    large_prompt = "Explain sessions.\n" + ("old context " * 12_000)
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="First answer")),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="Second answer")),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(content="Default threshold summary")
+                ),
+            ],
+        ]
+    )
+    settings = ProviderSettings(
+        default_provider="local",
+        providers=(
+            OpenAICompatibleProviderConfig(
+                name="local",
+                models=("fake",),
+                default_model="fake",
+                context_windows={"fake": 20_000},
+            ),
+        ),
+    )
+    session = await CodingSession.load(
+        CodingSessionConfig(
+            provider=provider,
+            model="fake",
+            system="You are Tau.",
+            storage=storage,
+            cwd=tmp_path,
+            provider_name="local",
+            provider_settings=settings,
+        )
+    )
+
+    assert session.context_window_tokens == 20_000
+    assert session.auto_compact_token_threshold == 3_616
+
+    _first_events = await _collect_session_events(session.prompt(large_prompt))
+    _second_events = await _collect_session_events(session.prompt("Continue."))
+
+    compactions = [entry for entry in await storage.read_all() if entry.type == "compaction"]
+
+    assert len(compactions) == 1
+    assert compactions[0].summary == "Default threshold summary"
+
+
+@pytest.mark.anyio
+async def test_session_compacts_and_retries_once_after_context_overflow(
+    tmp_path: Path,
+) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    large_prompt = "Collect context.\n" + ("old context " * 12_000)
+    provider = FakeProvider(
+        [
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="First answer")),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="Second answer")),
+            ],
+            [ProviderErrorEvent(message="This model's maximum context length was exceeded.")],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(
+                    message=AssistantMessage(content="Overflow recovery summary")
+                ),
+            ],
+            [
+                ProviderResponseStartEvent(model="fake"),
+                ProviderResponseEndEvent(message=AssistantMessage(content="Recovered answer")),
+            ],
+        ]
+    )
+    session = await CodingSession.load(_config(tmp_path, provider, storage))
+    _first_events = await _collect_session_events(session.prompt(large_prompt))
+    _second_events = await _collect_session_events(session.prompt("Keep this recent turn."))
+
+    retry_events = await _collect_session_events(session.prompt("Trigger overflow."))
+    entries = await storage.read_all()
+    compactions = [entry for entry in entries if entry.type == "compaction"]
+
+    assert len(compactions) == 1
+    assert compactions[0].summary == "Overflow recovery summary"
+    assert any(
+        getattr(event, "type", None) == "message_end"
+        and getattr(event, "message", None) == AssistantMessage(content="Recovered answer")
+        for event in retry_events
+    )
+    assert provider.calls[4][2] == [
+        UserMessage(content="Previous conversation summary:\nOverflow recovery summary"),
+        UserMessage(content="Keep this recent turn."),
+        AssistantMessage(content="Second answer"),
+        UserMessage(content="Trigger overflow."),
     ]
 
 
