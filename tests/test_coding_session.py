@@ -520,6 +520,13 @@ async def test_prompt_queues_steering_while_session_is_running(tmp_path: Path) -
     await task
 
     assert queue_events == [QueueUpdateEvent(steering=("Queued steering",))]
+    assert [entry.type for entry in entries_before_release] == [
+        "session_info",
+        "model_change",
+        "thinking_level_change",
+        "message",
+        "leaf",
+    ]
     before_release_messages = [
         entry.message for entry in entries_before_release if entry.type == "message"
     ]
