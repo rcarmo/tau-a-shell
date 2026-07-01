@@ -63,6 +63,7 @@ from tau_coding.provider_catalog import (
 from tau_coding.provider_config import (
     ProviderConfig,
     ProviderSelection,
+    ensure_dynamic_provider_models,
     load_provider_settings,
     provider_config_from_catalog_entry,
     provider_default_thinking_level,
@@ -3768,6 +3769,10 @@ async def run_tui_app(
         raise RuntimeError("--resume and --new-session cannot be used together")
 
     provider_settings = load_provider_settings()
+    for provider in provider_settings.providers:
+        provider_settings = await ensure_dynamic_provider_models(
+            provider_settings, provider_name=provider.name
+        )
     shell_settings = load_shell_settings()
     manager = session_manager or SessionManager()
     record = _explicit_resume_record(

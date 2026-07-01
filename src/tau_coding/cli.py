@@ -24,6 +24,7 @@ from tau_coding.provider_config import (
     OpenAICompatibleProviderConfig,
     ProviderConfig,
     ProviderSettings,
+    ensure_dynamic_provider_models,
     load_provider_settings,
     provider_default_thinking_level,
     provider_kind,
@@ -436,6 +437,8 @@ async def run_openai_print_mode(
     """Run print mode with the OpenAI-compatible provider configured from the environment."""
     settings = load_provider_settings()
     shell_settings = load_shell_settings()
+    target_provider = provider_name or settings.default_provider
+    settings = await ensure_dynamic_provider_models(settings, provider_name=target_provider)
     selection = resolve_provider_selection(settings, provider_name=provider_name, model=model)
     provider = create_model_provider(
         selection.provider,
