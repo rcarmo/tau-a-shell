@@ -34,14 +34,23 @@ async def test_create_coding_tools_returns_initial_tool_set(tmp_path: Path) -> N
     assert [tool.name for tool in tools] == ["read", "write", "edit", "bash"]
     edit_tool = tools[2]
     assert edit_tool.prompt_snippet is not None
-    assert "Use edit for precise changes" in edit_tool.prompt_guidelines[0]
+    assert "Use edit for precise file changes instead of shell commands" in edit_tool.prompt_guidelines[0]
 
 
 def test_tool_definitions_expose_pi_style_prompt_metadata(tmp_path: Path) -> None:
     definition = create_edit_tool_definition(cwd=tmp_path)
 
     assert definition.prompt_snippet.startswith("Make precise file edits")
-    assert len(definition.prompt_guidelines) == 4
+    assert len(definition.prompt_guidelines) == 6
+
+
+def test_bash_tool_warns_about_constrained_shells(tmp_path: Path) -> None:
+    tool = create_bash_tool(cwd=tmp_path)
+
+    assert "non-interactive shell command" in tool.description
+    assert "basic POSIX sh" in tool.description
+    assert "a-Shell/iOS" in " ".join(tool.prompt_guidelines)
+    assert "prefer POSIX sh syntax" in tool.input_schema["properties"]["command"]["description"]
 
 
 def test_read_tool_schema_defines_line_controls_as_integers(tmp_path: Path) -> None:

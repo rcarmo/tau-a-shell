@@ -90,12 +90,17 @@ def collect_prompt_guidelines(
         guidelines.append(normalized)
 
     has_bash = "bash" in names
+    has_file_tools = bool({"read", "edit", "write"} & names)
     has_exploration_tools = bool({"grep", "find", "ls"} & names)
-    if has_bash and not has_exploration_tools:
-        add("Use bash for file operations like ls, rg, find")
-    elif has_bash and has_exploration_tools:
+    if has_file_tools:
+        add("Use read/edit/write tools for file inspection and edits; do not use shell commands for routine file changes.")
+    if has_bash:
         add(
-            "Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)"
+            "Treat bash as a single non-interactive command runner. The target may only provide basic POSIX sh (for example a-Shell on iOS), so avoid Bash-specific syntax and do not assume a persistent shell."
+        )
+    if has_bash and has_exploration_tools:
+        add(
+            "Prefer grep/find/ls tools over shell commands for file exploration (faster, respects .gitignore)."
         )
 
     for tool in tools:

@@ -32,8 +32,9 @@ def test_default_prompt_includes_tools_guidelines_date_and_cwd(tmp_path: Path) -
 
     assert "You are an expert coding assistant operating inside Tau" in prompt
     assert "Available tools:\n- read: Read file contents" in prompt
-    assert "- Use bash for file operations like ls, rg, find" in prompt
-    assert "- Use read to examine files instead of cat or sed." in prompt
+    assert "- Use read/edit/write tools for file inspection and edits" in prompt
+    assert "basic POSIX sh (for example a-Shell on iOS)" in prompt
+    assert "- Use read to examine files instead of cat, sed, awk, or shell redirection." in prompt
     assert prompt.endswith(f"Current date: 2026-06-17\nCurrent working directory: {tmp_path}")
 
 

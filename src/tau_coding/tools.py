@@ -192,8 +192,8 @@ def create_read_tool_definition(*, cwd: str | Path | None = None) -> ToolDefinit
             first_line_size = format_size(len(all_lines[start_line].encode()))
             output = (
                 f"[Line {start_display} is {first_line_size}, exceeds "
-                f"{format_size(DEFAULT_MAX_OUTPUT_BYTES)} limit. Use bash: sed -n "
-                f"'{start_display}p' {raw_path} | head -c {DEFAULT_MAX_OUTPUT_BYTES}]"
+                f"{format_size(DEFAULT_MAX_OUTPUT_BYTES)} limit. Use read with a narrower "
+                f"offset/limit range, or use a simple POSIX sh command such as sed only if needed.]"
             )
         elif truncation.truncated:
             end_display = start_display + truncation.output_lines - 1
@@ -238,7 +238,10 @@ def create_read_tool_definition(*, cwd: str | Path | None = None) -> ToolDefinit
             "full file, continue with offset until complete."
         ),
         prompt_snippet="Read file contents",
-        prompt_guidelines=("Use read to examine files instead of cat or sed.",),
+        prompt_guidelines=(
+            "Use read to examine files instead of cat, sed, awk, or shell redirection.",
+            "For large files, continue with offset/limit rather than switching to shell commands.",
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -391,6 +394,8 @@ def create_edit_tool_definition(*, cwd: str | Path | None = None) -> ToolDefinit
             "edits in one call"
         ),
         prompt_guidelines=(
+            "Use edit for precise file changes instead of shell commands, here-docs, perl, or sed -i.",
+            "Before using edit, read the relevant file contents so edits[].oldText can match exactly.",
             "Use edit for precise changes (edits[].oldText must match exactly)",
             "When changing multiple separate locations in one file, use one edit call with "
             "multiple entries in edits[] instead of multiple edit calls",
@@ -551,17 +556,24 @@ def create_bash_tool_definition(
     return ToolDefinition(
         name="bash",
         description=(
-            "Execute a bash command in the current working directory. Returns stdout and stderr. "
+            "Execute one non-interactive shell command in the current working directory. "
+            "The runtime shell may be basic POSIX sh (for example a-Shell on iOS), not GNU bash; "
+            "do not assume Bash-specific syntax, job control, a persistent session, or a full desktop toolchain. "
+            "Returns stdout and stderr. "
             f"Output is truncated to last {DEFAULT_MAX_OUTPUT_LINES} lines or "
             f"{DEFAULT_MAX_OUTPUT_BYTES // 1024}KB (whichever is hit first). If truncated, "
             "full output is saved to a temp file. Optionally provide a timeout in seconds."
         ),
-        prompt_snippet="Execute bash commands (ls, grep, find, etc.)",
-        prompt_guidelines=(),
+        prompt_snippet="Execute a single non-interactive shell command (basic sh may be all that is available)",
+        prompt_guidelines=(
+            "Use bash only for simple non-interactive commands; it may actually be basic POSIX sh on constrained systems such as a-Shell/iOS.",
+            "Do not assume Bash-only features like arrays, [[ ... ]], process substitution, pipefail, brace expansion, or a persistent shell session.",
+            "Prefer read/edit/write for file inspection and modification instead of shelling out with cat, sed, here-docs, or redirection.",
+        ),
         input_schema={
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Bash command to execute"},
+                "command": {"type": "string", "description": "Single non-interactive shell command to execute; prefer POSIX sh syntax"},
                 "timeout": {
                     "type": "number",
                     "description": "Timeout in seconds (optional, no default timeout)",

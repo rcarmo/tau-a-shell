@@ -102,6 +102,10 @@ def _coerce_value(annotation: Any, value: Any) -> Any:
                 continue
         return value
     if annotation in {str, int, float, bool} and not isinstance(value, annotation):
+        if isinstance(value, (dict, list, tuple, set)):
+            raise ValidationError(f"Cannot coerce {type(value).__name__} to {annotation.__name__}")
+        if annotation is str:
+            raise ValidationError(f"Expected str, got {type(value).__name__}")
         try:
             return annotation(value)
         except Exception as exc:  # noqa: BLE001
