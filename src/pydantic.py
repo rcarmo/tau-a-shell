@@ -175,6 +175,10 @@ class BaseModel:
 
 
 class TypeAdapter:
+    def __class_getitem__(cls, item: Any) -> type[TypeAdapter]:
+        del item
+        return cls
+
     def __init__(self, annotation: Any) -> None:
         self.annotation = annotation
 
