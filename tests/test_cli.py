@@ -32,7 +32,7 @@ def test_version_command() -> None:
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "tau 0.1.5"
+    assert result.stdout.strip() == "tau 0.1.6"
 
 
 def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,7 +45,7 @@ def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPa
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "tau 0.1.5"
+    assert result.stdout.strip() == "tau 0.1.6"
 
 
 def test_print_mode_writes_update_notice_to_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -923,16 +923,21 @@ def test_setup_command_warns_when_api_key_env_is_missing(
     assert "Set MISSING_API_KEY before running Tau with this provider." in result.stderr
 
 
-def test_use_basic_repl_on_ios(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_textual_is_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TAU_TEXTUAL", raising=False)
     monkeypatch.delenv("TAU_BASIC_REPL", raising=False)
-    monkeypatch.setattr(cli.sys, "platform", "ios")
+
+    assert cli._use_basic_repl() is False
+
+
+def test_basic_repl_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAU_BASIC_REPL", "1")
 
     assert cli._use_basic_repl() is True
 
 
-def test_use_textual_override_on_ios(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_textual_env_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TAU_BASIC_REPL", "1")
     monkeypatch.setenv("TAU_TEXTUAL", "1")
-    monkeypatch.setattr(cli.sys, "platform", "ios")
 
     assert cli._use_basic_repl() is False

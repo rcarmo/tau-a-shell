@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from os import environ
 from pathlib import Path
 from typing import Annotated
@@ -299,17 +298,10 @@ def _startup_update_notice() -> UpdateNotice | None:
 
 
 def _use_basic_repl() -> bool:
-    """Return true when the Textual TUI should be avoided.
-
-    a-Shell/iOS exposes a terminal-like environment, but Textual's Linux input
-    driver can fail with EBADF when selecting on stdin. Use a small line-based
-    REPL there unless the user explicitly opts back into Textual.
-    """
+    """Return true when the user explicitly avoids the Textual TUI."""
     if environ.get("TAU_TEXTUAL") in {"1", "true", "yes"}:
         return False
-    if environ.get("TAU_BASIC_REPL") in {"1", "true", "yes"}:
-        return True
-    return sys.platform in {"ios", "tvos", "watchos"}
+    return environ.get("TAU_BASIC_REPL") in {"1", "true", "yes"}
 
 
 def run_basic_repl(

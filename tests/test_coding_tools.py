@@ -247,3 +247,13 @@ async def test_bash_tool_cancellation_kills_shell_children(tmp_path: Path) -> No
     assert result.data["cancelled"] is True
     assert "cancelled" in result.content
     assert duration < 0.5
+
+
+@pytest.mark.anyio
+async def test_bash_tool_does_not_read_parent_stdin(tmp_path: Path) -> None:
+    tool = create_bash_tool(cwd=tmp_path)
+
+    result = await tool.execute({"command": "python - <<'EOF'\nimport sys\ndata = sys.stdin.read()\nprint('stdin-bytes', len(data))\nEOF"})
+
+    assert result.ok is True
+    assert "stdin-bytes 0" in result.content

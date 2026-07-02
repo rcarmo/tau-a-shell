@@ -471,6 +471,7 @@ def create_bash_tool_definition(
             process = await asyncio.create_subprocess_shell(
                 shell_command,
                 cwd=root,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
@@ -480,6 +481,7 @@ def create_bash_tool_definition(
             process = await asyncio.create_subprocess_shell(
                 shell_command,
                 cwd=root,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )

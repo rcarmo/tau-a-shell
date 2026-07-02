@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "tau-ai"
-version = "0.1.5"
+version = "0.1.6"
 description = "A Python implementation of a minimalist Pi-style coding-agent harness."
 readme = "README.md"
 license = "MIT"
