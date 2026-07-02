@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from os import environ
 from pathlib import Path
 from typing import Annotated
@@ -228,6 +229,16 @@ def main(
 
     if prompt_option is None:
         notice = _startup_update_notice()
+        if _use_basic_repl():
+            run_basic_repl(
+                model=model,
+                cwd=cwd or Path.cwd(),
+                provider_name=provider,
+                output=output,
+                initial_prompt=initial_prompt,
+                notice=notice,
+            )
+            raise typer.Exit()
         try:
             anyio.run(
                 run_openai_tui,
@@ -285,6 +296,59 @@ async def run_openai_tui(
 
 def _startup_update_notice() -> UpdateNotice | None:
     return startup_update_notice(__version__)
+
+
+def _use_basic_repl() -> bool:
+    """Return true when the Textual TUI should be avoided.
+
+    a-Shell/iOS exposes a terminal-like environment, but Textual's Linux input
+    driver can fail with EBADF when selecting on stdin. Use a small line-based
+    REPL there unless the user explicitly opts back into Textual.
+    """
+    if environ.get("TAU_TEXTUAL") in {"1", "true", "yes"}:
+        return False
+    if environ.get("TAU_BASIC_REPL") in {"1", "true", "yes"}:
+        return True
+    return sys.platform in {"ios", "tvos", "watchos"}
+
+
+def run_basic_repl(
+    *,
+    model: str | None,
+    cwd: Path,
+    provider_name: str | None,
+    output: PrintOutputMode,
+    initial_prompt: str | None = None,
+    notice: UpdateNotice | None = None,
+) -> None:
+    """Run a minimal stdin/stdout prompt loop for terminals unsupported by Textual."""
+    if notice is not None and output is PrintOutputMode.text:
+        typer.echo(notice.message, err=True)
+    typer.echo("Tau basic mode. Type a prompt and press Enter; /exit or Ctrl-D exits.")
+
+    def run_one(prompt: str) -> None:
+        try:
+            ok = anyio.run(run_openai_print_mode, prompt, model, cwd, output, provider_name)
+        except RuntimeError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            return
+        if not ok:
+            typer.echo("Prompt failed.", err=True)
+
+    if initial_prompt:
+        run_one(initial_prompt)
+
+    while True:
+        try:
+            prompt = input("tau> ").strip()
+        except EOFError:
+            typer.echo("")
+            return
+        if not prompt:
+            continue
+        if prompt in {"/exit", "/quit", "exit", "quit"}:
+            return
+        run_one(prompt)
 
 
 def render_session_list(records: list[CodingSessionRecord]) -> None:
