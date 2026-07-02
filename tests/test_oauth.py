@@ -11,7 +11,10 @@ from tau_coding.oauth import (
     OPENAI_CODEX_CLIENT_ID,
     account_id_from_access_token,
     create_openai_codex_authorization_flow,
+    github_copilot_base_url,
+    normalize_github_domain,
     parse_authorization_input,
+    refresh_github_copilot_token,
     refresh_openai_codex_token,
 )
 
@@ -91,6 +94,49 @@ async def test_refresh_openai_codex_token_preserves_refresh_and_reads_jwt_expiry
     assert credential.refresh == "old-refresh"
     assert credential.account_id == "account-3"
     assert credential.expires == expires * 1000
+
+
+def test_github_copilot_base_url_extracts_proxy_endpoint_and_enterprise_domain() -> None:
+    token = "x;proxy-ep=proxy.enterprise.githubcopilot.com;y"
+
+    assert (
+        github_copilot_base_url(token)
+        == "https://api.enterprise.githubcopilot.com"
+    )
+    assert (
+        github_copilot_base_url("", "example.ghe.com")
+        == "https://copilot-api.example.ghe.com"
+    )
+    assert (
+        github_copilot_base_url("")
+        == "https://api.individual.githubcopilot.com"
+    )
+
+
+def test_normalize_github_domain_accepts_url_or_hostname() -> None:
+    assert normalize_github_domain("https://example.ghe.com/org") == "example.ghe.com"
+    assert normalize_github_domain("example.ghe.com") == "example.ghe.com"
+    assert normalize_github_domain("") == ""
+
+
+@pytest.mark.anyio
+async def test_refresh_github_copilot_token_returns_copilot_oauth_credential() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://api.github.com/copilot_internal/v2/token"
+        assert request.headers["authorization"] == "Bearer github-token"
+        assert request.headers["copilot-integration-id"] == "vscode-chat"
+        return httpx.Response(
+            200,
+            json={"token": "copilot-token", "expires_at": 2_000_000},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        credential = await refresh_github_copilot_token("github-token", client=client)
+
+    assert credential.access == "copilot-token"
+    assert credential.refresh == "github-token"
+    assert credential.account_id == "github.com"
+    assert credential.expires == 2_000_000_000 - 5 * 60 * 1000
 
 
 def _jwt(account_id: str, *, expires: int | None = None) -> str:

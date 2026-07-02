@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
@@ -14,6 +15,7 @@ from tau_coding.provider_config import (
     ProviderSettings,
     ScopedModelConfig,
     anthropic_config_from_provider,
+    ensure_dynamic_provider_models,
     load_provider_settings,
     openai_compatible_config_from_provider,
     provider_default_thinking_level,
@@ -35,8 +37,12 @@ def test_load_provider_settings_missing_file_uses_openai_default(tmp_path: Path)
         "openai",
         "openai-codex",
         "anthropic",
+        "github-copilot",
         "openrouter",
         "huggingface",
+        "deepseek",
+        "opencode-go",
+        "nebius",
     ]
     assert settings.providers[0].default_model == DEFAULT_MODEL
     assert settings.get_provider("anthropic").api_key_env == "ANTHROPIC_API_KEY"
@@ -51,6 +57,7 @@ def test_builtin_openai_declares_model_scoped_thinking_capabilities() -> None:
     huggingface = settings.get_provider("huggingface")
     codex = settings.get_provider("openai-codex")
     anthropic = settings.get_provider("anthropic")
+    copilot = settings.get_provider("github-copilot")
 
     assert openai.context_windows["gpt-5.5"] == 272_000
     assert openai.context_windows["gpt-5.5-pro"] == 1_050_000
@@ -111,6 +118,19 @@ def test_builtin_openai_declares_model_scoped_thinking_capabilities() -> None:
     )
     assert provider_thinking_unavailable_reason(anthropic, model="claude-sonnet-4-6") is None
     assert provider_thinking_levels(anthropic, model="claude-haiku-4-5") == ()
+    assert copilot.default_model == "gpt-5.5"
+    assert copilot.dynamic_models is True
+    assert "claude-sonnet-5" in copilot.models
+    assert "claude-sonnet-4.6" in copilot.models
+    assert "gemini-3.5-flash" in copilot.models
+    assert provider_thinking_levels(copilot, model="gpt-5.4") == (
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
+    assert provider_thinking_levels(copilot, model="claude-sonnet-4.6") == ()
 
 
 def test_save_provider_settings_writes_backup_when_replacing(tmp_path: Path) -> None:
@@ -148,7 +168,12 @@ def test_save_provider_settings_writes_backup_when_replacing(tmp_path: Path) -> 
     )
 
 
-def test_save_and_load_provider_settings_round_trip(tmp_path: Path) -> None:
+def test_save_and_load_provider_settings_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     paths = TauPaths(home=tmp_path / ".tau")
     settings = ProviderSettings(
         default_provider="local",
@@ -234,10 +259,14 @@ def test_upsert_openai_compatible_provider_replaces_and_sets_default() -> None:
     assert updated.default_provider == "local"
     assert [item.name for item in updated.providers] == [
         "anthropic",
+        "deepseek",
+        "github-copilot",
         "huggingface",
         "local",
+        "nebius",
         "openai",
         "openai-codex",
+        "opencode-go",
         "openrouter",
     ]
     assert replaced.get_provider("local").default_model == "llama"
@@ -694,6 +723,7 @@ def test_load_provider_settings_restores_builtin_providers_with_stored_credentia
     tmp_path: Path,
 ) -> None:
     for env_name in (
+        "DEEPSEEK_API_KEY",
         "OPENAI_API_KEY",
         "OPENAI_CODEX_ACCESS_TOKEN",
         "ANTHROPIC_API_KEY",
@@ -860,3 +890,166 @@ def test_openai_compatible_provider_config_rejects_invalid_retries() -> None:
         OpenAICompatibleProviderConfig(name="local", max_retries=-1)
     with pytest.raises(ProviderConfigError, match="0 or greater"):
         OpenAICompatibleProviderConfig(name="local", max_retry_delay_seconds=-1)
+
+
+def test_nebius_builtin_entry_is_dynamic_with_empty_catalog() -> None:
+    settings = ProviderSettings()
+    nebius = settings.get_provider("nebius")
+
+    assert isinstance(nebius, OpenAICompatibleProviderConfig)
+    assert nebius.base_url == "https://api.tokenfactory.nebius.com/v1"
+    assert nebius.api_key_env == "NEBIUS_TOKEN_FACTORY_API_KEY"
+    assert nebius.models == ()
+    assert nebius.default_model == ""
+
+
+@pytest.mark.anyio
+async def test_ensure_dynamic_provider_models_populates_nebius_at_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEBIUS_TOKEN_FACTORY_API_KEY", "nebius-key")
+    paths = TauPaths(home=tmp_path / ".tau")
+    settings = load_provider_settings(paths)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["verbose"] == "true"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "meta-llama/Llama-3.3-70B-Instruct", "context_window": 131072},
+                    {"id": "deepseek-ai/DeepSeek-R1-0528"},
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        updated = await ensure_dynamic_provider_models(
+            settings, provider_name="nebius", paths=paths, client=client
+        )
+
+    nebius = updated.get_provider("nebius")
+    assert nebius.models == (
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "deepseek-ai/DeepSeek-R1-0528",
+    )
+    assert nebius.default_model == "meta-llama/Llama-3.3-70B-Instruct"
+    assert nebius.context_windows["meta-llama/Llama-3.3-70B-Instruct"] == 131072
+
+    reloaded = load_provider_settings(paths)
+    assert reloaded.get_provider("nebius").models == nebius.models
+
+
+@pytest.mark.anyio
+async def test_ensure_dynamic_provider_models_uses_copilot_proxy_and_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
+    paths = TauPaths(home=tmp_path / ".tau")
+    credential_store = FileCredentialStore(tmp_path / ".tau" / "credentials.json")
+    credential_store.set_oauth(
+        "github-copilot",
+        OAuthCredential(
+            access="tid=1;proxy-ep=proxy.enterprise.test;token",
+            refresh="github-refresh",
+            expires=9999999999999,
+            account_id="github.com",
+        ),
+    )
+    settings = load_provider_settings(paths)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "gpt-5.5", "context_window": 272000},
+                    {"id": "claude-sonnet-5", "context_window": 1000000},
+                    {"id": "gemini-3.5-flash"},
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        updated = await ensure_dynamic_provider_models(
+            settings,
+            provider_name="github-copilot",
+            paths=paths,
+            credential_store=credential_store,
+            client=client,
+        )
+
+    copilot = updated.get_provider("github-copilot")
+    assert requests[0].url == "https://api.enterprise.test/models?verbose=true"
+    assert requests[0].headers["authorization"] == "Bearer tid=1;proxy-ep=proxy.enterprise.test;token"
+    assert requests[0].headers["copilot-integration-id"] == "vscode-chat"
+    assert copilot.models == ("gpt-5.5", "claude-sonnet-5", "gemini-3.5-flash")
+    assert copilot.default_model == "gpt-5.5"
+    assert copilot.context_windows["claude-sonnet-5"] == 1000000
+
+
+@pytest.mark.anyio
+async def test_ensure_dynamic_provider_models_leaves_non_dynamic_unchanged(
+    tmp_path: Path,
+) -> None:
+    paths = TauPaths(home=tmp_path / ".tau")
+    settings = load_provider_settings(paths)
+    openai_before = settings.get_provider("openai")
+
+    updated = await ensure_dynamic_provider_models(
+        settings, provider_name="openai", paths=paths
+    )
+
+    assert updated.get_provider("openai").models == openai_before.models
+
+
+@pytest.mark.anyio
+async def test_ensure_dynamic_provider_models_without_credentials_is_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEBIUS_TOKEN_FACTORY_API_KEY", raising=False)
+    paths = TauPaths(home=tmp_path / ".tau")
+    settings = load_provider_settings(paths)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should not call the models endpoint without credentials")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        updated = await ensure_dynamic_provider_models(
+            settings, provider_name="nebius", paths=paths, client=client
+        )
+
+    assert updated.get_provider("nebius").models == ()
+
+
+def test_github_copilot_provider_uses_stored_oauth_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN", raising=False)
+    provider = ProviderSettings().get_provider("github-copilot")
+
+    class FakeCredentials:
+        def get(self, name: str) -> str | None:
+            return None
+
+        def get_oauth(self, name: str) -> OAuthCredential | None:
+            if name != "github-copilot":
+                return None
+            return OAuthCredential(
+                access="copilot-token",
+                refresh="github-token",
+                expires=999_999_999_999,
+                account_id="github.com",
+            )
+
+    config = openai_compatible_config_from_provider(
+        provider,
+        credential_reader=FakeCredentials(),
+    )
+
+    assert config.api_key == "copilot-token"

@@ -11,6 +11,8 @@ from shutil import copy2
 from tempfile import NamedTemporaryFile
 from typing import Any, Protocol
 
+import httpx
+
 from tau_ai import (
     DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_OPENAI_CODEX_BASE_URL,
@@ -19,13 +21,26 @@ from tau_ai import (
     DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS,
     AnthropicConfig,
     OpenAICompatibleConfig,
+    list_openai_compatible_models,
 )
-from tau_ai.env import DEFAULT_OPENAI_COMPATIBLE_BASE_URL
+from tau_ai.env import DEFAULT_OPENAI_COMPATIBLE_BASE_URL, AnthropicThinkingType
 from tau_coding.credentials import FileCredentialStore, credentials_path
+from tau_coding.oauth import (
+    github_copilot_base_url,
+    oauth_credential_is_expired,
+    refresh_github_copilot_token,
+)
 from tau_coding.paths import TauPaths
-from tau_coding.provider_catalog import BUILTIN_PROVIDER_CATALOG, ProviderKind
+from tau_coding.provider_catalog import (
+    BUILTIN_PROVIDER_CATALOG,
+    ProviderKind,
+    ThinkingMode,
+    builtin_provider_entry,
+    catalog_model_override,
+)
 from tau_coding.thinking import (
     DEFAULT_THINKING_LEVEL,
+    THINKING_LEVELS,
     ThinkingLevel,
     ThinkingParameter,
     anthropic_thinking_budget_for_level,
@@ -67,6 +82,7 @@ class OpenAICompatibleProviderConfig:
     thinking_models: tuple[str, ...] = ()
     thinking_default: ThinkingLevel | None = None
     thinking_parameter: ThinkingParameter | None = None
+    dynamic_models: bool = False
 
     def __post_init__(self) -> None:
         _validate_provider_numbers(
@@ -103,6 +119,7 @@ class OpenAICompatibleProviderConfig:
             "thinking_models": list(self.thinking_models),
             "thinking_default": self.thinking_default,
             "thinking_parameter": self.thinking_parameter,
+            "dynamic_models": self.dynamic_models,
         }
 
 
@@ -114,8 +131,8 @@ class AnthropicProviderConfig:
     base_url: str = DEFAULT_ANTHROPIC_BASE_URL
     api_key_env: str = "ANTHROPIC_API_KEY"
     credential_name: str | None = "anthropic"
-    models: tuple[str, ...] = ("claude-sonnet-4-6",)
-    default_model: str = "claude-sonnet-4-6"
+    models: tuple[str, ...] = ("claude-fable-5", "claude-sonnet-5", "claude-sonnet-4-6")
+    default_model: str = "claude-sonnet-5"
     context_windows: dict[str, int] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: float = DEFAULT_OPENAI_COMPATIBLE_TIMEOUT_SECONDS
@@ -334,6 +351,7 @@ def provider_config_from_catalog_entry(name: str) -> ProviderConfig:
             thinking_models=entry.thinking_models,
             thinking_default=entry.thinking_default,
             thinking_parameter=entry.thinking_parameter,
+            dynamic_models=entry.dynamic_models,
         )
     raise ProviderConfigError(f"Unknown built-in provider: {name}")
 
@@ -488,6 +506,20 @@ def upsert_provider(
         scoped_models=settings.scoped_models,
     )
     updated.get_provider(default_provider)
+    return updated
+
+
+def _replace_provider(settings: ProviderSettings, provider: ProviderConfig) -> ProviderSettings:
+    """Return settings with an exact provider replacement, without built-in model merging."""
+    providers_by_name = {item.name: item for item in settings.providers}
+    providers_by_name[provider.name] = provider
+    providers = tuple(providers_by_name[name] for name in sorted(providers_by_name))
+    updated = ProviderSettings(
+        default_provider=settings.default_provider,
+        providers=providers,
+        scoped_models=settings.scoped_models,
+    )
+    updated.get_provider(settings.default_provider)
     return updated
 
 
@@ -668,12 +700,58 @@ def provider_thinking_levels(
     model: str | None = None,
 ) -> tuple[ThinkingLevel, ...]:
     """Return thinking levels supported by a provider/model pair."""
+    selected_model = model or provider.default_model
+    override = catalog_model_override(provider.name, selected_model)
+    if override is not None:
+        if override.always_thinking:
+            return ()
+        if override.thinking_modes is not None:
+            return tuple(level for level in THINKING_LEVELS if level in override.thinking_modes)
     if provider.thinking_levels is None:
         return ()
-    selected_model = model or provider.default_model
     if provider.thinking_models and selected_model not in provider.thinking_models:
         return ()
     return provider.thinking_levels
+
+
+def provider_thinking_is_always_on(
+    provider: ProviderConfig,
+    *,
+    model: str | None = None,
+) -> bool:
+    """Return whether built-in metadata declares reasoning as always enabled."""
+    selected_model = model or provider.default_model
+    override = catalog_model_override(provider.name, selected_model)
+    return override.always_thinking if override is not None else False
+
+
+def provider_thinking_level_label(
+    provider: ProviderConfig,
+    level: str,
+    *,
+    model: str | None = None,
+) -> str:
+    """Return the provider-facing display label for a canonical Tau level."""
+    normalized = normalize_thinking_level(level)
+    mode = _thinking_mode(provider, model=model, level=normalized)
+    return mode.label if mode is not None and mode.label is not None else normalized
+
+
+def provider_thinking_level_from_label(
+    provider: ProviderConfig,
+    value: str,
+    *,
+    model: str | None = None,
+) -> ThinkingLevel:
+    """Resolve a provider-facing input label to a canonical Tau level."""
+    selected_model = model or provider.default_model
+    override = catalog_model_override(provider.name, selected_model)
+    if override is not None and override.thinking_modes is not None:
+        label = value.strip().lower()
+        for level, mode in override.thinking_modes.items():
+            if mode.label == label:
+                return level
+    return normalize_thinking_level(value)
 
 
 def provider_thinking_unavailable_reason(
@@ -683,6 +761,8 @@ def provider_thinking_unavailable_reason(
 ) -> str | None:
     """Explain why a provider/model pair has no configurable thinking modes."""
     selected_model = model or provider.default_model
+    if provider_thinking_is_always_on(provider, model=selected_model):
+        return f"Reasoning is always enabled for {selected_model}"
     if provider.thinking_levels is None:
         if isinstance(provider, OpenAICodexProviderConfig):
             return (
@@ -705,6 +785,10 @@ def provider_default_thinking_level(
     levels = provider_thinking_levels(provider, model=model)
     if not levels:
         return None
+    selected_model = model or provider.default_model
+    override = catalog_model_override(provider.name, selected_model)
+    if override is not None and override.thinking_default in levels:
+        return override.thinking_default
     if provider.thinking_default in levels:
         return provider.thinking_default
     if DEFAULT_THINKING_LEVEL in levels:
@@ -741,18 +825,137 @@ def openai_compatible_config_from_provider(
     )
 
 
+async def ensure_dynamic_provider_models(
+    settings: ProviderSettings,
+    *,
+    provider_name: str,
+    paths: TauPaths | None = None,
+    credential_store: FileCredentialStore | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> ProviderSettings:
+    """Populate a dynamic provider's model list at build time.
+
+    Built-in providers flagged ``dynamic_models`` (such as Nebius Token Factory)
+    start with an empty model catalog. When Tau has usable credentials for the
+    selected provider, this fetches the live model list from the provider's
+    ``/models`` endpoint (with ``verbose=true``), persists it through the normal
+    provider-settings path, and returns the updated settings. It is best-effort:
+    any network, auth, or parse error leaves the settings unchanged so startup
+    never fails because of a model listing problem.
+    """
+    entry = builtin_provider_entry(provider_name)
+    if entry is None or not entry.dynamic_models:
+        return settings
+    try:
+        provider = settings.get_provider(provider_name)
+    except ProviderConfigError:
+        return settings
+    if not isinstance(provider, OpenAICompatibleProviderConfig):
+        return settings
+
+    store = credential_store or FileCredentialStore(credentials_path(paths) if paths else None)
+    if not provider_has_usable_credentials(provider, credential_reader=store):
+        return settings
+
+    try:
+        if provider.name == "github-copilot":
+            provider = await _github_copilot_provider_for_model_listing(
+                provider,
+                credential_store=store,
+            )
+        runtime_config = openai_compatible_config_from_provider(
+            provider, credential_reader=store
+        )
+        models = await list_openai_compatible_models(
+            runtime_config, verbose=True, client=client
+        )
+    except Exception:
+        return settings
+
+    if not models:
+        return settings
+
+    model_ids = tuple(model.id for model in models)
+    context_windows = {
+        **dict(provider.context_windows),
+        **{
+            model.id: model.context_window
+            for model in models
+            if model.context_window is not None
+        },
+    }
+    default_model = provider.default_model if provider.default_model in model_ids else model_ids[0]
+    updated_provider = replace(
+        provider,
+        models=model_ids,
+        default_model=default_model,
+        context_windows=context_windows,
+    )
+    updated = _replace_provider(settings, updated_provider)
+    save_provider_settings(updated, paths)
+    return updated
+
+
+async def _github_copilot_provider_for_model_listing(
+    provider: OpenAICompatibleProviderConfig,
+    *,
+    credential_store: FileCredentialStore,
+) -> OpenAICompatibleProviderConfig:
+    """Return a Copilot provider config suitable for calling its OpenAI-compatible API."""
+    headers = {**dict(provider.headers), **_github_copilot_headers()}
+    credential_name = provider.credential_name
+    if not credential_name:
+        return replace(provider, headers=headers)
+    credential = credential_store.get_oauth(credential_name)
+    if credential is None:
+        return replace(provider, headers=headers)
+    if oauth_credential_is_expired(credential):
+        credential = await refresh_github_copilot_token(
+            credential.refresh,
+            enterprise_domain=credential.account_id if credential.account_id != "github.com" else "",
+        )
+        credential_store.set_oauth(credential_name, credential)
+    return replace(
+        provider,
+        base_url=github_copilot_base_url(credential.access, credential.account_id),
+        headers=headers,
+    )
+
+
+def _github_copilot_headers() -> dict[str, str]:
+    return {
+        "User-Agent": "GitHubCopilotChat/0.35.0",
+        "Editor-Version": "vscode/1.107.0",
+        "Editor-Plugin-Version": "copilot-chat/0.35.0",
+        "Copilot-Integration-Id": "vscode-chat",
+        "openai-intent": "conversation-panel",
+    }
+
+
 def anthropic_config_from_provider(
     provider: AnthropicProviderConfig,
     *,
     credential_reader: CredentialReader | None = None,
+    model: str | None = None,
     thinking_level: ThinkingLevel | None = None,
 ) -> AnthropicConfig:
     """Build Anthropic runtime config from durable settings."""
     api_key = _api_key_from_provider(provider, credential_reader=credential_reader)
-    thinking_budget_tokens = _anthropic_thinking_budget_from_provider(
+    thinking_type = _anthropic_thinking_type_from_provider(
         provider,
+        model=model,
         thinking_level=thinking_level,
     )
+    thinking_budget_tokens = (
+        None
+        if thinking_type is not None
+        else _anthropic_thinking_budget_from_provider(
+            provider,
+            model=model,
+            thinking_level=thinking_level,
+        )
+    )
+    auth_header = "authorization" if provider.name == "github-copilot" else "x-api-key"
     return AnthropicConfig(
         api_key=api_key,
         base_url=provider.base_url.rstrip("/"),
@@ -761,6 +964,8 @@ def anthropic_config_from_provider(
         max_retries=provider.max_retries,
         max_retry_delay_seconds=provider.max_retry_delay_seconds,
         thinking_budget_tokens=thinking_budget_tokens,
+        thinking_type=thinking_type,
+        auth_header=auth_header,
     )
 
 
@@ -780,11 +985,11 @@ def provider_has_usable_credentials(
 ) -> bool:
     """Return whether Tau can attempt calls for this provider without prompting setup."""
     if provider.credential_name and credential_reader is not None:
-        if isinstance(provider, OpenAICodexProviderConfig):
+        if isinstance(provider, OpenAICodexProviderConfig) or provider.name == "github-copilot":
             get_oauth = getattr(credential_reader, "get_oauth", None)
             if get_oauth is not None and get_oauth(provider.credential_name) is not None:
                 return True
-        elif credential_reader.get(provider.credential_name):
+        if credential_reader.get(provider.credential_name):
             return True
     return bool(environ.get(provider.api_key_env))
 
@@ -813,29 +1018,79 @@ def _reasoning_effort_from_provider(
             f"Thinking mode {normalized} is not available for "
             f"{provider.name}:{selected_model}. Available modes: {available}"
         )
-    return reasoning_effort_for_level(normalized)
+    api_value = _thinking_api_value(provider, model=model, level=normalized)
+    return api_value if api_value is not None else reasoning_effort_for_level(normalized)
 
 
 def _anthropic_thinking_budget_from_provider(
     provider: AnthropicProviderConfig,
     *,
+    model: str | None = None,
     thinking_level: ThinkingLevel | None,
 ) -> int | None:
     if thinking_level is None or provider.thinking_parameter != "anthropic.thinking":
         return None
 
-    levels = provider_thinking_levels(provider)
+    levels = provider_thinking_levels(provider, model=model)
     if not levels:
         return None
 
     normalized = normalize_thinking_level(thinking_level)
     if normalized not in levels:
+        selected_model = model or provider.default_model
         available = ", ".join(levels)
         raise ProviderConfigError(
             f"Thinking mode {normalized} is not available for "
-            f"{provider.name}:{provider.default_model}. Available modes: {available}"
+            f"{provider.name}:{selected_model}. Available modes: {available}"
         )
     return anthropic_thinking_budget_for_level(normalized)
+
+
+def _anthropic_thinking_type_from_provider(
+    provider: AnthropicProviderConfig,
+    *,
+    model: str | None,
+    thinking_level: ThinkingLevel | None,
+) -> AnthropicThinkingType | None:
+    if thinking_level is None or provider.thinking_parameter != "anthropic.thinking":
+        return None
+    normalized = normalize_thinking_level(thinking_level)
+    levels = provider_thinking_levels(provider, model=model)
+    if not levels:
+        return None
+    if normalized not in levels:
+        selected_model = model or provider.default_model
+        available = ", ".join(levels)
+        raise ProviderConfigError(
+            f"Thinking mode {normalized} is not available for "
+            f"{provider.name}:{selected_model}. Available modes: {available}"
+        )
+    api_value = _thinking_api_value(provider, model=model, level=normalized)
+    if api_value == "adaptive":
+        return "adaptive"
+    if api_value == "disabled":
+        return "disabled"
+    return None
+
+
+def _thinking_api_value(
+    provider: ProviderConfig,
+    *,
+    model: str | None,
+    level: ThinkingLevel,
+) -> str | None:
+    mode = _thinking_mode(provider, model=model, level=level)
+    return mode.api_value if mode is not None else None
+
+
+def _thinking_mode(
+    provider: ProviderConfig, *, model: str | None, level: ThinkingLevel
+) -> ThinkingMode | None:
+    selected_model = model or provider.default_model
+    override = catalog_model_override(provider.name, selected_model)
+    if override is None or override.thinking_modes is None:
+        return None
+    return override.thinking_modes.get(level)
 
 
 def _provider_from_json(data: object) -> ProviderConfig:
@@ -850,8 +1105,15 @@ def _provider_from_json(data: object) -> ProviderConfig:
     credential_name = _optional_string(
         data.get("credential_name"), f"providers[{name}].credential_name"
     )
-    models = _string_tuple(data.get("models"), f"providers[{name}].models")
-    default_model = _string(data.get("default_model"), f"providers[{name}].default_model")
+    dynamic_models = bool(data.get("dynamic_models", False))
+    if dynamic_models:
+        models = _optional_string_tuple(data.get("models"), f"providers[{name}].models")
+        default_model = _emptyable_string(
+            data.get("default_model"), f"providers[{name}].default_model"
+        )
+    else:
+        models = _string_tuple(data.get("models"), f"providers[{name}].models")
+        default_model = _string(data.get("default_model"), f"providers[{name}].default_model")
     context_windows = _context_window_dict(
         data.get("context_windows", {}), f"providers[{name}].context_windows"
     )
@@ -883,7 +1145,7 @@ def _provider_from_json(data: object) -> ProviderConfig:
     thinking_parameter = _optional_thinking_parameter(
         data.get("thinking_parameter"), f"providers[{name}].thinking_parameter"
     )
-    if default_model not in models:
+    if default_model and default_model not in models:
         models = (*models, default_model)
     if provider_type == "anthropic":
         return AnthropicProviderConfig(
@@ -937,6 +1199,7 @@ def _provider_from_json(data: object) -> ProviderConfig:
         thinking_models=thinking_models,
         thinking_default=thinking_default,
         thinking_parameter=thinking_parameter,
+        dynamic_models=dynamic_models,
     )
 
 
@@ -949,6 +1212,11 @@ def _api_key_from_provider(
         credential = credential_reader.get(provider.credential_name)
         if credential:
             return credential
+        get_oauth = getattr(credential_reader, "get_oauth", None)
+        if get_oauth is not None:
+            oauth_credential = get_oauth(provider.credential_name)
+            if oauth_credential is not None:
+                return oauth_credential.access
 
     api_key = environ.get(provider.api_key_env)
     if api_key:
@@ -1036,6 +1304,15 @@ def _optional_string(value: object, field_name: str) -> str | None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise ProviderConfigError(f"Provider field must be a non-empty string: {field_name}")
+    return value.strip()
+
+
+def _emptyable_string(value: object, field_name: str) -> str:
+    """Parse a string field that may be empty (used by dynamic model catalogs)."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ProviderConfigError(f"Provider field must be a string: {field_name}")
     return value.strip()
 
 

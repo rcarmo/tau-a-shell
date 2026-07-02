@@ -432,11 +432,11 @@ def _provider_credential_status(
     credential_reader: CredentialReader | None,
 ) -> str:
     if provider.credential_name and credential_reader is not None:
-        if provider_kind(provider) == "openai-codex":
+        if provider_kind(provider) == "openai-codex" or provider.name == "github-copilot":
             get_oauth = getattr(credential_reader, "get_oauth", None)
             if get_oauth is not None and get_oauth(provider.credential_name) is not None:
                 return f"stored:{provider.credential_name}"
-        elif credential_reader.get(provider.credential_name):
+        if credential_reader.get(provider.credential_name):
             return f"stored:{provider.credential_name}"
     if environ.get(provider.api_key_env):
         return f"env:{provider.api_key_env}"

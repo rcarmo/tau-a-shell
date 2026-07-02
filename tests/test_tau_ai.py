@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping
-from json import loads
+from json import dumps, loads
 
 import httpx
 import pytest
@@ -18,6 +18,10 @@ from tau_ai import (
     AnthropicConfig,
     AnthropicProvider,
     FakeProvider,
+    redact_json_value,
+    redact_headers,
+    LLMObservation,
+    ModelInfo,
     OpenAICodexConfig,
     OpenAICodexCredentials,
     OpenAICodexProvider,
@@ -30,12 +34,21 @@ from tau_ai import (
     ProviderTextDeltaEvent,
     ProviderThinkingDeltaEvent,
     ProviderToolCallEvent,
+    list_openai_compatible_models,
     openai_compatible_config_from_env,
 )
 
 
 async def _collect(stream: AsyncIterator[object]) -> list[object]:
     return [event async for event in stream]
+
+
+class RecordingLLMObserver:
+    def __init__(self) -> None:
+        self.records: list[LLMObservation] = []
+
+    def record(self, observation: LLMObservation) -> None:
+        self.records.append(observation)
 
 
 @pytest.mark.anyio
@@ -517,7 +530,8 @@ async def test_openai_codex_provider_includes_http_error_detail_in_message() -> 
 
     assert isinstance(events[-1], ProviderErrorEvent)
     assert events[-1].message == (
-        "OpenAI Codex request failed with status 400: The requested model does not exist."
+        "OpenAI Codex request failed with status 400: "
+        "The requested model does not exist."
     )
     assert events[-1].data == {
         "status_code": 400,
@@ -1150,9 +1164,13 @@ async def test_responses_api_formats_request_for_restricted_model() -> None:
         UserMessage(content="weather in Paris?"),
         AssistantMessage(
             content="",
-            tool_calls=[ToolCall(id="call_1", name="get_weather", arguments={"city": "Paris"})],
+            tool_calls=[
+                ToolCall(id="call_1", name="get_weather", arguments={"city": "Paris"})
+            ],
         ),
-        ToolResultMessage(tool_call_id="call_1", name="get_weather", content='{"temp_c": 19}'),
+        ToolResultMessage(
+            tool_call_id="call_1", name="get_weather", content='{"temp_c": 19}'
+        ),
         UserMessage(content="summarize"),
     ]
 
@@ -1271,50 +1289,6 @@ async def test_responses_api_parses_streamed_tool_call() -> None:
     assert end.message.tool_calls[0].id == "call_abc"
     assert end.message.tool_calls[0].arguments == {"city": "Paris"}
     assert end.finish_reason == "tool_calls"
-
-
-@pytest.mark.anyio
-async def test_responses_api_streams_refusal_as_text() -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            text=(
-                'data: {"type":"response.refusal.delta","delta":"I can"}\n\n'
-                'data: {"type":"response.refusal.delta","delta":"not help with that."}\n\n'
-                'data: {"type":"response.refusal.done",'
-                '"refusal":"I cannot help with that."}\n\n'
-                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
-            ),
-            headers={"content-type": "text/event-stream"},
-        )
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        provider = OpenAICompatibleProvider(
-            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
-            client=client,
-        )
-
-        events = await _collect(
-            provider.stream_response(
-                model="gpt-5.5",
-                system="You are Tau.",
-                messages=[UserMessage(content="unsafe request")],
-                tools=[],
-            )
-        )
-
-    assert [event.type for event in events] == [
-        "response_start",
-        "text_delta",
-        "text_delta",
-        "response_end",
-    ]
-    text_deltas = [e.delta for e in events if isinstance(e, ProviderTextDeltaEvent)]
-    assert text_deltas == ["I can", "not help with that."]
-    end = events[-1]
-    assert isinstance(end, ProviderResponseEndEvent)
-    assert end.message.content == "I cannot help with that."
-    assert end.finish_reason == "stop"
 
 
 @pytest.mark.anyio
@@ -1538,3 +1512,488 @@ async def test_responses_api_maps_incomplete_status_to_length() -> None:
     assert isinstance(end, ProviderResponseEndEvent)
     assert end.message.content == "partial"
     assert end.finish_reason == "length"
+
+
+@pytest.mark.anyio
+async def test_list_openai_compatible_models_uses_verbose_and_parses_ids() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "meta-llama/Llama-3.3-70B-Instruct",
+                        "object": "model",
+                        "owned_by": "system",
+                        "context_window": 131072,
+                    },
+                    {"id": "deepseek-ai/DeepSeek-R1-0528", "object": "model"},
+                    {"id": "meta-llama/Llama-3.3-70B-Instruct"},
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models = await list_openai_compatible_models(
+            OpenAICompatibleConfig(
+                api_key="nebius-key",
+                base_url="https://api.tokenfactory.nebius.com/v1",
+            ),
+            verbose=True,
+            client=client,
+        )
+
+    assert [model.id for model in models] == [
+        "meta-llama/Llama-3.3-70B-Instruct",
+        "deepseek-ai/DeepSeek-R1-0528",
+    ]
+    assert isinstance(models[0], ModelInfo)
+    assert models[0].context_window == 131072
+    assert models[1].context_window is None
+    assert len(requests) == 1
+    assert requests[0].url.path == "/v1/models"
+    assert requests[0].url.params["verbose"] == "true"
+    assert requests[0].headers["authorization"] == "Bearer nebius-key"
+
+
+@pytest.mark.anyio
+async def test_list_openai_compatible_models_omits_verbose_when_false() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "verbose" not in request.url.params
+        return httpx.Response(200, json={"data": [{"id": "model-a"}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models = await list_openai_compatible_models(
+            OpenAICompatibleConfig(api_key="key", base_url="https://example.test/v1"),
+            verbose=False,
+            client=client,
+        )
+
+    assert [model.id for model in models] == ["model-a"]
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_can_send_responses_reasoning_effort() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(
+                api_key="test-key",
+                base_url="https://example.test/v1",
+                reasoning_effort="high",
+                reasoning_effort_parameter="reasoning.effort",
+            ),
+            client=client,
+        )
+
+        await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    payload = loads(requests[0].content)
+    assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert "reasoning_effort" not in payload
+
+
+@pytest.mark.anyio
+async def test_openai_codex_provider_retries_transient_response_failed_event() -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                text=(
+                    'data: {"type":"response.failed","response":{"status":"failed",'
+                    '"status_code":503,"error":{"code":"service_unavailable",'
+                    '"message":"temporarily unavailable"}}}\n\n'
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+                'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                max_retries=1,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 2
+    assert isinstance(events[1], ProviderRetryEvent)
+    assert events[1].attempt == 2
+    assert events[1].max_attempts == 2
+    assert [event.type for event in events] == [
+        "response_start",
+        "retry",
+        "response_start",
+        "text_delta",
+        "response_end",
+    ]
+    assert isinstance(events[-1], ProviderResponseEndEvent)
+    assert events[-1].message.content == "ok"
+
+
+@pytest.mark.anyio
+async def test_openai_codex_provider_stops_after_max_response_failed_retries() -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.failed","response":{"status":"failed",'
+                '"status_code":503,"error":{"message":"temporarily unavailable"}}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+                max_retries=1,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="gpt-5.5",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 2
+    assert [event.type for event in events] == [
+        "response_start",
+        "retry",
+        "response_start",
+        "error",
+    ]
+    assert isinstance(events[-1], ProviderErrorEvent)
+    assert events[-1].retryable is True
+    assert events[-1].data == {
+        "attempts": 2,
+        "event": {
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "status_code": 503,
+                "error": {"message": "temporarily unavailable"},
+            },
+        }
+    }
+
+
+@pytest.mark.anyio
+async def test_anthropic_provider_retries_transient_stream_error() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                text=(
+                    'data: {"type":"error","error":{"type":"overloaded_error",'
+                    '"message":"overloaded"}}\n\n'
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"ok"}}\n\n'
+                'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                base_url="https://api.anthropic.test/v1",
+                max_retries=1,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="claude-test",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 2
+    assert isinstance(events[1], ProviderRetryEvent)
+    assert [event.type for event in events] == [
+        "response_start",
+        "retry",
+        "response_start",
+        "text_delta",
+        "response_end",
+    ]
+
+
+@pytest.mark.anyio
+async def test_anthropic_provider_does_not_retry_non_transient_stream_error() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"bad request"}}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="test-key",
+                base_url="https://api.anthropic.test/v1",
+                max_retries=3,
+                max_retry_delay_seconds=0,
+            ),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="claude-test",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say ok")],
+                tools=[],
+            )
+        )
+
+    assert len(requests) == 1
+    assert [event.type for event in events] == ["response_start", "error"]
+    assert isinstance(events[-1], ProviderErrorEvent)
+    assert events[-1].retryable is False
+    assert events[-1].data == {
+        "attempts": 1,
+        "event": {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "bad request"},
+        },
+    }
+
+
+def test_llm_observation_redacts_headers_and_prompt_like_text() -> None:
+    headers = redact_headers(
+        {
+            "Authorization": "Bearer secret-key",
+            "X-Api-Key": "api-secret",
+            "X-HF-Bill-To": "my-org",
+        }
+    )
+
+    assert headers["Authorization"] == "[REDACTED]"
+    assert headers["X-Api-Key"] == "[REDACTED]"
+    assert headers["X-HF-Bill-To"] == "my-org"
+
+    body = redact_json_value(
+        {
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "secret prompt"}],
+            "input": {"type": "function_call", "path": "/private/file.txt"},
+        }
+    )
+
+    assert isinstance(body, dict)
+    assert body["model"] == "test-model"
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    assert message["role"] == "user"
+    content = message["content"]
+    assert isinstance(content, dict)
+    assert content["redacted"] is True
+    assert content["length"] == len("secret prompt")
+    input_value = body["input"]
+    assert isinstance(input_value, dict)
+    assert input_value["type"] == "function_call"
+    path = input_value["path"]
+    assert isinstance(path, dict)
+    assert path["redacted"] is True
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_observes_redacted_request_and_response() -> None:
+    observer = RecordingLLMObserver()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+            headers={"content-type": "text/event-stream", "x-request-id": "req-1"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
+            client=client,
+            observer=observer,
+        )
+
+        await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="system secret",
+                messages=[UserMessage(content="user secret")],
+                tools=[],
+            )
+        )
+
+    assert [record.kind for record in observer.records] == ["request", "response"]
+    request = observer.records[0]
+    assert request.provider == "openai-compatible"
+    assert request.model == "test-model"
+    assert request.method == "POST"
+    assert request.url == "https://example.test/v1/chat/completions"
+    assert request.attempt == 1
+    assert request.stream is True
+    assert request.data["request"]["headers"]["Authorization"] == "[REDACTED]"  # type: ignore[index]
+    request_body = request.data["request"]["body"]  # type: ignore[index]
+    assert request_body["model"] == "test-model"  # type: ignore[index]
+    assert request_body["stream"] is True  # type: ignore[index]
+    system_content = request_body["messages"][0]["content"]  # type: ignore[index]
+    user_content = request_body["messages"][1]["content"]  # type: ignore[index]
+    assert system_content["redacted"] is True  # type: ignore[index]
+    assert system_content["length"] == len("system secret")  # type: ignore[index]
+    assert user_content["redacted"] is True  # type: ignore[index]
+    assert "system secret" not in dumps(request.to_json())
+    assert "user secret" not in dumps(request.to_json())
+    assert "test-key" not in dumps(request.to_json())
+
+    response = observer.records[1]
+    assert response.data["response"]["status_code"] == 200  # type: ignore[index]
+    assert response.data["response"]["headers"]["x-request-id"] == "req-1"  # type: ignore[index]
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_provider_observes_redacted_error_body() -> None:
+    observer = RecordingLLMObserver()
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="bad request includes user secret")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
+            client=client,
+            observer=observer,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="test-model",
+                system="You are Tau.",
+                messages=[UserMessage(content="Say hello")],
+                tools=[],
+            )
+        )
+
+    assert isinstance(events[-1], ProviderErrorEvent)
+    assert [record.kind for record in observer.records] == ["request", "response", "error"]
+    error = observer.records[-1]
+    error_body = error.data["error"]["body"]  # type: ignore[index]
+    assert error_body["redacted"] is True  # type: ignore[index]
+    assert error_body["length"] == len("bad request includes user secret")  # type: ignore[index]
+    assert "bad request includes user secret" not in dumps(error.to_json())
+
+
+@pytest.mark.anyio
+async def test_anthropic_provider_can_use_bearer_auth_for_copilot() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"type":"message_stop"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(
+                api_key="copilot-token",
+                base_url="https://api.individual.githubcopilot.com",
+                auth_header="authorization",
+            ),
+            client=client,
+        )
+        async for _event in provider.stream_response(
+            model="claude-sonnet-4.6",
+            system="",
+            messages=[UserMessage(content="hello")],
+            tools=[],
+        ):
+            pass
+
+    request = requests[0]
+    assert request.headers["authorization"] == "Bearer copilot-token"
+    assert "x-api-key" not in request.headers

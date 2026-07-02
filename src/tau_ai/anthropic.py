@@ -71,8 +71,11 @@ class AnthropicProvider:
                 **(dict(self._config.headers or {})),
                 "anthropic-version": ANTHROPIC_VERSION,
                 "content-type": "application/json",
-                "x-api-key": self._config.api_key,
             }
+            if self._config.auth_header.lower() == "authorization":
+                headers["Authorization"] = f"Bearer {self._config.api_key}"
+            else:
+                headers["x-api-key"] = self._config.api_key
             url = f"{self._config.base_url.rstrip('/')}/messages"
 
             attempt = 0

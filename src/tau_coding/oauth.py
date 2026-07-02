@@ -21,6 +21,16 @@ import httpx
 
 from tau_coding.credentials import OAuthCredential
 
+GITHUB_COPILOT_OAUTH_PROVIDER = "github-copilot"
+GITHUB_COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+GITHUB_COPILOT_API_VERSION = "2026-06-01"
+GITHUB_COPILOT_HEADERS = {
+    "User-Agent": "GitHubCopilotChat/0.35.0",
+    "Editor-Version": "vscode/1.107.0",
+    "Editor-Plugin-Version": "copilot-chat/0.35.0",
+    "Copilot-Integration-Id": "vscode-chat",
+}
+
 OPENAI_CODEX_OAUTH_PROVIDER = "openai-codex"
 OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OPENAI_CODEX_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
@@ -501,3 +511,211 @@ def _oauth_html(message: str) -> str:
         .replace('"', "&quot;")
     )
     return f'<!doctype html><meta charset="utf-8"><title>Tau OAuth</title><p>{escaped}</p>'
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubCopilotDeviceFlow:
+    """GitHub device-code login state for Copilot."""
+
+    device_code: str
+    user_code: str
+    verification_uri: str
+    interval: int
+    expires_in: int
+
+
+async def login_github_copilot(
+    *,
+    on_auth: AuthCallback,
+    on_prompt: PromptCallback | None = None,
+    on_progress: ProgressCallback | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> OAuthCredential:
+    """Run GitHub Copilot device OAuth and return refreshable credentials.
+
+    The stored refresh value is the GitHub OAuth token. The stored access value
+    is the short-lived Copilot API token, refreshed on demand via GitHub's
+    ``/copilot_internal/v2/token`` endpoint.
+    """
+    enterprise_domain = ""
+    if on_prompt is not None:
+        raw_domain = await on_prompt(
+            OAuthPrompt(
+                message="GitHub Enterprise URL/domain (blank for github.com):",
+                placeholder="company.ghe.com",
+            )
+        )
+        enterprise_domain = normalize_github_domain(raw_domain)
+    domain = enterprise_domain or "github.com"
+
+    owns_client = client is None
+    http_client = client or httpx.AsyncClient(timeout=30)
+    try:
+        device = await start_github_copilot_device_flow(domain, client=http_client)
+        on_auth(
+            OAuthAuthInfo(
+                url=device.verification_uri,
+                instructions=f"Enter code: {device.user_code}",
+            )
+        )
+        github_token = await poll_github_copilot_device_flow(
+            domain,
+            device,
+            client=http_client,
+        )
+        on_progress and on_progress("Exchanging GitHub token for Copilot token...")
+        credential = await refresh_github_copilot_token(
+            github_token,
+            enterprise_domain=enterprise_domain,
+            client=http_client,
+        )
+        on_progress and on_progress("Fetching Copilot model availability...")
+        return credential
+    finally:
+        if owns_client:
+            await http_client.aclose()
+
+
+async def start_github_copilot_device_flow(
+    domain: str = "github.com",
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> GitHubCopilotDeviceFlow:
+    """Start GitHub's device-code OAuth flow for Copilot."""
+    owns_client = client is None
+    http_client = client or httpx.AsyncClient(timeout=30)
+    try:
+        response = await http_client.post(
+            f"https://{domain}/login/device/code",
+            data={"client_id": GITHUB_COPILOT_CLIENT_ID, "scope": "read:user"},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": GITHUB_COPILOT_HEADERS["User-Agent"],
+            },
+        )
+        response.raise_for_status()
+        raw = response.json()
+        return GitHubCopilotDeviceFlow(
+            device_code=_required_string(raw, "device_code", action="device flow"),
+            user_code=_required_string(raw, "user_code", action="device flow"),
+            verification_uri=_required_string(raw, "verification_uri", action="device flow"),
+            interval=int(raw.get("interval") or 5),
+            expires_in=int(raw.get("expires_in") or 900),
+        )
+    finally:
+        if owns_client:
+            await http_client.aclose()
+
+
+async def poll_github_copilot_device_flow(
+    domain: str,
+    device: GitHubCopilotDeviceFlow,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Poll GitHub's device-code endpoint until the GitHub token is available."""
+    owns_client = client is None
+    http_client = client or httpx.AsyncClient(timeout=30)
+    interval = max(device.interval, 5)
+    deadline = time.monotonic() + device.expires_in
+    try:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(interval)
+            response = await http_client.post(
+                f"https://{domain}/login/oauth/access_token",
+                data={
+                    "client_id": GITHUB_COPILOT_CLIENT_ID,
+                    "device_code": device.device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": GITHUB_COPILOT_HEADERS["User-Agent"],
+                },
+            )
+            response.raise_for_status()
+            raw = response.json()
+            token = raw.get("access_token")
+            if isinstance(token, str) and token.strip():
+                return token.strip()
+            error = raw.get("error")
+            if error in {"authorization_pending", None}:
+                continue
+            if error == "slow_down":
+                interval += 5
+                continue
+            description = raw.get("error_description")
+            suffix = f": {description}" if isinstance(description, str) else ""
+            raise OAuthError(f"GitHub device flow failed: {error}{suffix}")
+    finally:
+        if owns_client:
+            await http_client.aclose()
+    raise OAuthError("GitHub device flow timed out")
+
+
+async def refresh_github_copilot_token(
+    github_token: str,
+    *,
+    enterprise_domain: str = "",
+    client: httpx.AsyncClient | None = None,
+) -> OAuthCredential:
+    """Exchange a GitHub OAuth token for a short-lived Copilot API token."""
+    domain = enterprise_domain or "github.com"
+    owns_client = client is None
+    http_client = client or httpx.AsyncClient(timeout=30)
+    try:
+        response = await http_client.get(
+            f"https://api.{domain}/copilot_internal/v2/token",
+            headers={
+                **GITHUB_COPILOT_HEADERS,
+                "Accept": "application/json",
+                "Authorization": f"Bearer {github_token}",
+            },
+        )
+        response.raise_for_status()
+        raw = response.json()
+        access = _required_string(raw, "token", action="copilot token")
+        expires_at = raw.get("expires_at")
+        if not isinstance(expires_at, int | float) or isinstance(expires_at, bool):
+            raise OAuthError("Missing Copilot token expiry")
+        return OAuthCredential(
+            access=access,
+            refresh=github_token,
+            expires=int(expires_at * 1000) - 5 * 60 * 1000,
+            account_id=enterprise_domain or "github.com",
+        )
+    finally:
+        if owns_client:
+            await http_client.aclose()
+
+
+def github_copilot_base_url(token: str, enterprise_domain: str = "") -> str:
+    """Return the Copilot API base URL for a token or enterprise domain."""
+    marker = "proxy-ep="
+    if marker in token:
+        host = token.split(marker, 1)[1].split(";", 1)[0]
+        if host:
+            return "https://" + host.replace("proxy.", "api.", 1)
+    if enterprise_domain and enterprise_domain != "github.com":
+        return f"https://copilot-api.{enterprise_domain}"
+    return "https://api.individual.githubcopilot.com"
+
+
+def normalize_github_domain(value: str | None) -> str:
+    """Normalize a user-entered GitHub Enterprise URL/domain."""
+    stripped = (value or "").strip()
+    if not stripped:
+        return ""
+    if "://" not in stripped:
+        stripped = "https://" + stripped
+    parsed = urlparse(stripped)
+    return parsed.hostname or ""
+
+
+def _required_string(raw: dict[str, Any], field: str, *, action: str) -> str:
+    value = raw.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise OAuthError(f"Missing {field} in GitHub Copilot {action} response")
+    return value.strip()

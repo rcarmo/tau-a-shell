@@ -3728,7 +3728,10 @@ async def test_tui_login_subscription_opens_oauth_provider_picker() -> None:
         assert isinstance(app.screen, LoginProviderPickerScreen)
         provider_list = app.screen.query_one("#login-provider-list", ListView)
         labels = [str(item.query_one(Label).render()) for item in provider_list.children]
-        assert labels == ["OpenAI Codex subscription\n  openai-codex"]
+        assert labels == [
+            "OpenAI Codex subscription\n  openai-codex",
+            "GitHub Copilot\n  github-copilot",
+        ]
         assert "gpt-5.5" not in "\n".join(labels)
 
 
@@ -5094,3 +5097,11 @@ class _FakeSessionManager:
     def list_sessions(self, cwd: Path | None = None) -> list[CodingSessionRecord]:
         del cwd
         return self._records
+
+
+def test_github_copilot_is_subscription_login_provider() -> None:
+    subscription = tui_app._subscription_login_providers(tui_app.BUILTIN_PROVIDER_CATALOG)
+    api_key = tui_app._api_key_login_providers(tui_app.BUILTIN_PROVIDER_CATALOG)
+
+    assert any(provider.name == "github-copilot" for provider in subscription)
+    assert all(provider.name != "github-copilot" for provider in api_key)

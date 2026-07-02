@@ -56,7 +56,8 @@ from tau_ai import ProviderErrorEvent, ProviderEvent
 from tau_ai.provider import CancellationToken
 from tau_coding.commands import CommandRegistry, create_default_command_registry
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
-from tau_coding.oauth import OAuthAuthInfo, OAuthPrompt, login_openai_codex
+from tau_coding.diagnostics import llm_observer_from_env
+from tau_coding.oauth import OAuthAuthInfo, OAuthPrompt, login_github_copilot, login_openai_codex
 from tau_coding.provider_catalog import (
     BUILTIN_PROVIDER_CATALOG,
     ProviderCatalogEntry,
@@ -65,8 +66,10 @@ from tau_coding.provider_catalog import (
 from tau_coding.provider_config import (
     ProviderConfig,
     ProviderSelection,
+    ensure_dynamic_provider_models,
     load_provider_settings,
     provider_config_from_catalog_entry,
+    provider_default_thinking_level,
     provider_has_usable_credentials,
     resolve_provider_selection,
     upsert_saved_provider,
@@ -83,7 +86,6 @@ from tau_coding.session import (
 )
 from tau_coding.session_manager import CodingSessionRecord, SessionManager
 from tau_coding.shell_config import load_shell_settings
-from tau_coding.thinking import DEFAULT_THINKING_LEVEL
 from tau_coding.tui.adapter import TuiEventAdapter
 from tau_coding.tui.autocomplete import (
     CompletionItem,
@@ -173,6 +175,8 @@ class CompletionActionTarget(Protocol):
 
     def action_toggle_tool_results(self) -> None: ...
 
+    def action_toggle_sidebar(self) -> None: ...
+
     def action_toggle_thinking(self) -> None: ...
 
     def action_edit_queued_follow_up(self) -> bool: ...
@@ -190,6 +194,9 @@ class SessionCompletionRecord(Protocol):
     model: str
     cwd: Path
     updated_at: float
+
+
+PASTE_DISPLAY_THRESHOLD = 2_000
 
 
 class PromptInput(TextArea):
@@ -210,6 +217,9 @@ class PromptInput(TextArea):
         self._base_bindings = self._bindings.copy()
         self._footer_mode: Literal["normal", "completion", "running"] = "normal"
         self._apply_prompt_bindings()
+        self._pending_full_content: str | None = None
+        self._last_text_length: int = 0
+        self._placeholder: str = ""
 
     def set_footer_mode(self, mode: Literal["normal", "completion", "running"]) -> None:
         """Switch the prompt bindings shown by Textual's built-in footer."""
@@ -294,6 +304,10 @@ class PromptInput(TextArea):
         """Toggle app-level tool result display."""
         self._completion_target().action_toggle_tool_results()
 
+    def action_toggle_sidebar(self) -> None:
+        """Toggle app-level sidebar display."""
+        self._completion_target().action_toggle_sidebar()
+
     def action_toggle_thinking(self) -> None:
         """Toggle app-level thinking-token display."""
         self._completion_target().action_toggle_thinking()
@@ -305,6 +319,9 @@ class PromptInput(TextArea):
         if self.text:
             self.text = ""
             self.move_cursor((0, 0))
+            self._pending_full_content = None
+            self._last_text_length = 0
+            self._placeholder = ""
 
     def get_line(self, line_index: int) -> Text:
         """Retrieve one prompt line with shell prefixes highlighted."""
@@ -342,6 +359,27 @@ class PromptInput(TextArea):
         """Use up arrow for completion selection while focused."""
         self.action_completion_previous()
 
+    def _detect_paste(self, new_text: str) -> None:
+        """Detect large paste and show placeholder in the input box."""
+        new_len = len(new_text)
+        delta = new_len - self._last_text_length
+
+        if delta > PASTE_DISPLAY_THRESHOLD and new_len > PASTE_DISPLAY_THRESHOLD:
+            char_count = new_len
+            line_count = new_text.count("\n") + 1
+            kb = char_count / 1024
+            parts: list[str] = [f"{char_count:,} characters"]
+            if line_count > 1:
+                parts.append(f"{line_count} lines")
+            if kb >= 1:
+                parts.append(f"{kb:.1f} KB")
+            self._placeholder = f"[Pasted content: {', '.join(parts)}]"
+            self._pending_full_content = new_text
+            self.text = self._placeholder
+            self.move_cursor((0, len(self._placeholder)))
+
+        self._last_text_length = len(self.text)
+
     async def on_key(self, event: Key) -> None:
         """Route completion and submission keys before default input handling."""
         keybindings = self.tui_keybindings
@@ -378,6 +416,9 @@ class PromptInput(TextArea):
         elif event.key == keybindings.toggle_tool_results:
             event.stop()
             self._completion_target().action_toggle_tool_results()
+        elif event.key == keybindings.toggle_sidebar:
+            event.stop()
+            self._completion_target().action_toggle_sidebar()
         elif event.key == keybindings.toggle_thinking:
             event.stop()
             self._completion_target().action_toggle_thinking()
@@ -414,7 +455,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
     """Minimal modal picker for indexed sessions."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Select", show=False),
@@ -495,7 +536,7 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
     """Modal picker for branching from a previous session entry."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Branch", show=False),
@@ -654,7 +695,7 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
 class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
     """Prompt for custom branch-summary instructions."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape,ctrl+c", "cancel", "Cancel")]
 
     def __init__(self, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -682,7 +723,7 @@ class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
         if event.key == "ctrl+enter":
             event.stop()
             self.action_submit()
-        elif event.key == "escape":
+        elif event.key in {"escape", "ctrl+c"}:
             event.stop()
             self.action_cancel()
 
@@ -717,7 +758,7 @@ class CommandOutputScreen(ModalScreen[None]):
     """Dismissible modal for slash-command output."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "close", "Close"),
+        Binding("escape,ctrl+c", "close", "Close"),
         Binding("enter", "close", "Close"),
         Binding("up", "scroll_up", "Scroll up", show=False, priority=True),
         Binding("down", "scroll_down", "Scroll down", show=False, priority=True),
@@ -767,7 +808,7 @@ class LoginProviderPickerScreen(ModalScreen[str | None]):
     """Provider picker for the TUI login flow."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Select", show=False),
@@ -841,7 +882,7 @@ class LoginMethodPickerScreen(ModalScreen[str | None]):
     """Login method picker for the TUI login flow."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
         Binding("down", "cursor_down", "Down", show=False, priority=True),
         Binding("enter", "select_cursor", "Select", show=False, priority=True),
@@ -951,7 +992,7 @@ class ThemePickerScreen(ModalScreen[TuiThemeName | None]):
     """Theme picker for the built-in TUI themes."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
         Binding("down", "cursor_down", "Down", show=False, priority=True),
         Binding("enter", "select_cursor", "Select", show=False, priority=True),
@@ -1026,7 +1067,7 @@ class ModelPickerSearchInput(Input):
     """Search input that keeps model-picker control keys local to the picker."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", show=False, priority=True),
         Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
@@ -1050,7 +1091,7 @@ class ModelPickerSearchInput(Input):
             event.stop()
             event.prevent_default()
             self.action_toggle_mode()
-        elif event.key == "escape":
+        elif event.key in {"escape", "ctrl+c"}:
             event.stop()
             event.prevent_default()
             self.action_cancel()
@@ -1076,7 +1117,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     """Model picker for the active TUI provider."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
         Binding("up", "cursor_up", "Up", show=False),
@@ -1292,7 +1333,7 @@ class LoginScreen(ModalScreen[str | None]):
     """Password prompt for saving a provider API key."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
     ]
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
@@ -1328,7 +1369,7 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
     """OAuth login flow for providers backed by subscription auth."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
     ]
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
@@ -1340,13 +1381,20 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
 
     def compose(self) -> ComposeResult:
         """Compose the OAuth login prompt."""
+        if self.provider.name == "github-copilot":
+            help_text = "Starting GitHub device login..."
+            placeholder = "Waiting for device code"
+        else:
+            help_text = "Complete the browser login, or paste the redirect URL."
+            placeholder = "Paste redirect URL or authorization code"
         with Vertical(id="login-screen"):
             yield Static(f"Login: {self.provider.display_name}", id="login-title")
-            yield Static("Complete the browser login, or paste the redirect URL.", id="login-help")
+            yield Static(help_text, id="login-help")
             yield Static("", id="login-oauth-url")
             yield Input(
-                placeholder="Paste redirect URL or authorization code",
+                placeholder=placeholder,
                 id="login-oauth-code",
+                disabled=self.provider.name == "github-copilot",
             )
             yield Static("Enter submits - Escape closes", id="login-footer")
 
@@ -1357,11 +1405,16 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
 
     async def _run_login(self) -> None:
         try:
-            credential = await login_openai_codex(
-                on_auth=self._show_auth,
-                on_prompt=self._prompt_for_code,
-                on_manual_code_input=self._manual_code_input,
-            )
+            if self.provider.name == "github-copilot":
+                credential = await login_github_copilot(
+                    on_auth=self._show_auth,
+                )
+            else:
+                credential = await login_openai_codex(
+                    on_auth=self._show_auth,
+                    on_prompt=self._prompt_for_code,
+                    on_manual_code_input=self._manual_code_input,
+                )
         except Exception as exc:  # noqa: BLE001 - surface OAuth failures in the TUI
             self.query_one("#login-help", Static).update(f"OAuth failed: {exc}")
             return
@@ -1774,42 +1827,34 @@ class TauTuiApp(App[None]):
         tui_settings: TuiSettings | None = None,
         startup_message: str | None = None,
         startup_notice: str | None = None,
-        startup_notices: Sequence[str] = (),
         initial_prompt: str | None = None,
     ) -> None:
         self.tui_settings = tui_settings or TuiSettings()
         self.startup_message = startup_message
-        legacy_notices = (startup_notice,) if startup_notice else ()
-        self.startup_notices = tuple((*startup_notices, *legacy_notices))
+        self.startup_notice = startup_notice
         self.initial_prompt = initial_prompt
         super().__init__()
         self._bindings = BindingsMap(_app_bindings(self.tui_settings.keybindings))
         self.session = session
         self.state = TuiState(skills=session.skills)
-        for notice in self.startup_notices:
-            self.state.add_item("status", notice)
+        if startup_notice:
+            self.state.add_item("status", startup_notice)
         self._prompt_history: tuple[str, ...] = ()
         self._load_session_messages_from_session()
         self.adapter = TuiEventAdapter(self.state)
         self._prompt_worker: Worker[None] | None = None
+        self._completion_visible_line_budget: int | None = None
         self._compaction_worker: Worker[None] | None = None
         self._prompt_run_id = 0
         self._completion_state = CompletionState()
-        self._completion_visible_line_budget: int | None = None
         self._activity_frame = 0
         self._activity_timer: Timer | None = None
         self._active_notification_keys: set[tuple[str, str]] = set()
         self._supports_pyperclip: bool | None = None
-        self._sync_header_title()
-
-    def _sync_header_title(self) -> None:
-        """Reflect the active session name in Textual's header state."""
-        self.title = "Tau"
-        self.sub_title = _session_header_sub_title(self.session)
 
     def _sync_text_selection_state(self) -> None:
         """Disable native text selection while the transcript is mutating."""
-        type(self).ALLOW_SELECT = not self.state.running
+        self.ALLOW_SELECT = not self.state.running
         if self.state.running and self.screen_stack:
             with suppress(Exception):
                 self.screen.clear_selection()
@@ -1907,10 +1952,13 @@ class TauTuiApp(App[None]):
         """Update prompt autocomplete when the prompt text changes."""
         if event.text_area.id != "prompt":
             return
+        prompt = self.query_one("#prompt", PromptInput)
+        prompt._detect_paste(event.text_area.text)
         self._sync_prompt_shell_mode(event.text_area.text)
         self._completion_visible_line_budget = None
         self._completion_state = self._build_completion_state(event.text_area.text)
         self._refresh_completions()
+        self._scroll_transcript_to_bottom()
 
     async def action_submit_prompt(self) -> None:
         """Submit the current prompt text or slash command."""
@@ -1926,6 +1974,11 @@ class TauTuiApp(App[None]):
         streaming_behavior: Literal["steer", "follow_up"],
     ) -> None:
         prompt = self.query_one("#prompt", PromptInput)
+        if prompt._pending_full_content is not None:
+            full = prompt._pending_full_content
+            extra = prompt.text.removeprefix(prompt._placeholder)
+            prompt.text = full + extra
+            prompt._pending_full_content = None
         raw_text = prompt.text
         applied_completion = self._apply_selected_completion(raw_text)
         if applied_completion is not None and applied_completion != raw_text:
@@ -2040,10 +2093,12 @@ class TauTuiApp(App[None]):
 
         if self.state.running:
             self._remember_prompt(text)
+            self._scroll_transcript_to_bottom()
             await self._queue_prompt(text, streaming_behavior=streaming_behavior)
             return
 
         self._remember_prompt(text)
+        self._scroll_transcript_to_bottom()
         self._submit_prompt(text)
 
     def _remember_prompt(self, text: str) -> None:
@@ -2104,11 +2159,15 @@ class TauTuiApp(App[None]):
         self._prompt_run_id += 1
         run_id = self._prompt_run_id
         self._follow_transcript_output()
-        self._refresh()
+        self._refresh(scroll_end=True)
         self._prompt_worker = self.run_worker(self._run_prompt(text, run_id), exclusive=True)
 
     def _follow_transcript_output(self) -> None:
         """Put the transcript back in follow mode for explicit user actions."""
+        self._scroll_transcript_to_bottom()
+
+    def _scroll_transcript_to_bottom(self) -> None:
+        """Force the transcript to the newest content immediately after user/agent activity."""
         if not self.screen_stack:
             return
         with suppress(NoMatches):
@@ -2127,7 +2186,7 @@ class TauTuiApp(App[None]):
             always_show_tool_result=True,
         )
         self._follow_transcript_output()
-        self._refresh()
+        self._refresh(scroll_end=True)
 
         try:
             result = await run_terminal_command(command, add_to_context=add_to_context)
@@ -2140,7 +2199,7 @@ class TauTuiApp(App[None]):
                     output=str(exc),
                 )
             self._notify(f"Could not run command: {exc}", severity="error")
-            self._refresh()
+            self._refresh(scroll_end=True)
             return
 
         if item_index >= len(self.state.items):
@@ -2153,13 +2212,14 @@ class TauTuiApp(App[None]):
             output=result.output,
         )
         self._follow_transcript_output()
-        self._refresh()
+        self._refresh(scroll_end=True)
 
     def _set_tui_theme(self, theme: TuiThemeName) -> None:
         self.tui_settings = TuiSettings(
             keybindings=self.tui_settings.keybindings,
             theme=theme,
             auto_copy_selection=self.tui_settings.auto_copy_selection,
+            show_sidebar=self.tui_settings.show_sidebar,
         )
         save_tui_settings(self.tui_settings)
         self.refresh_css(animate=False)
@@ -2178,7 +2238,7 @@ class TauTuiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surface queueing failures in the TUI
             self._notify(f"Could not queue message: {exc}", severity="error")
             return
-        self._refresh()
+        self._refresh(scroll_end=True)
 
     async def _run_prompt(self, text: str, run_id: int | None = None) -> None:
         """Run one prompt and stream session events into the TUI state."""
@@ -2192,6 +2252,7 @@ class TauTuiApp(App[None]):
                 if isinstance(event, ErrorEvent) and not event.recoverable:
                     _attach_diagnostic_log_path_to_error(self.state, self.session)
                 await self._apply_streaming_transcript_event(event)
+                await asyncio.sleep(0)
         except Exception as exc:  # noqa: BLE001 - surface unexpected worker errors in the TUI
             if active_run_id != self._prompt_run_id:
                 return
@@ -2200,7 +2261,7 @@ class TauTuiApp(App[None]):
             self.state.add_item("error", message)
             self.state.running = False
             self._sync_text_selection_state()
-            self._refresh()
+            self._refresh(scroll_end=True)
         finally:
             if active_run_id == self._prompt_run_id:
                 self._prompt_worker = None
@@ -2220,13 +2281,14 @@ class TauTuiApp(App[None]):
             self._refresh_chrome()
             return
         if isinstance(event, AgentEndEvent):
-            await transcript.finish_assistant_message()
+            await transcript.finish_assistant_message(scroll_end=True)
             self._refresh_chrome()
+            self._scroll_transcript_to_bottom()
             return
         if isinstance(event, MessageStartEvent):
             return
         if isinstance(event, MessageDeltaEvent):
-            await transcript.append_assistant_delta(event.delta, theme=theme)
+            await transcript.append_assistant_delta(event.delta, theme=theme, scroll_end=True)
             self._sync_activity_indicator()
             return
         if isinstance(event, ThinkingDeltaEvent):
@@ -2234,6 +2296,7 @@ class TauTuiApp(App[None]):
                 event.delta,
                 theme=theme,
                 show_thinking=self.state.show_thinking,
+                scroll_end=True,
             )
             self._sync_activity_indicator()
             return
@@ -2242,31 +2305,34 @@ class TauTuiApp(App[None]):
                 self._refresh()
                 return
             if event.message.role == "assistant":
-                await transcript.finish_assistant_message(event.message.content)
+                await transcript.finish_assistant_message(event.message.content, scroll_end=True)
                 self._refresh_chrome()
+                self._scroll_transcript_to_bottom()
                 return
             return
         if isinstance(event, ToolExecutionStartEvent):
-            await transcript.finish_assistant_message()
+            await transcript.finish_assistant_message(scroll_end=True)
             await transcript.append_item(
                 self.state.items[-1],
                 theme=theme,
                 show_tool_results=self.state.show_tool_results,
+                scroll_end=True,
             )
             self._refresh_chrome()
             return
         if isinstance(event, ToolExecutionUpdateEvent | RetryEvent | ErrorEvent):
-            await transcript.finish_assistant_message()
+            await transcript.finish_assistant_message(scroll_end=True)
             if self.state.items:
                 await transcript.append_item(
                     self.state.items[-1],
                     theme=theme,
                     show_tool_results=self.state.show_tool_results,
+                    scroll_end=True,
                 )
             self._refresh_chrome()
             return
         if isinstance(event, ToolExecutionEndEvent):
-            self._refresh()
+            self._refresh(scroll_end=True)
             return
         if isinstance(event, QueueUpdateEvent):
             self._refresh_chrome()
@@ -2464,6 +2530,19 @@ class TauTuiApp(App[None]):
         self._refresh()
         self._notify("Tool results expanded." if expanded else "Tool results collapsed.")
 
+    def action_toggle_sidebar(self) -> None:
+        """Toggle the session sidebar and persist the preference."""
+        self.tui_settings = TuiSettings(
+            keybindings=self.tui_settings.keybindings,
+            theme=self.tui_settings.theme,
+            auto_copy_selection=self.tui_settings.auto_copy_selection,
+            show_sidebar=not self.tui_settings.show_sidebar,
+        )
+        save_tui_settings(self.tui_settings)
+        self._update_responsive_layout(self.size.width, self.size.height)
+        self._refresh_footer_bindings()
+        self._notify("Sidebar shown." if self.tui_settings.show_sidebar else "Sidebar hidden.")
+
     def action_toggle_thinking(self) -> None:
         """Toggle thinking-token display in the transcript."""
         self.state.toggle_thinking()
@@ -2626,7 +2705,7 @@ class TauTuiApp(App[None]):
         if entry is None:
             self._notify(f"Unknown provider: {provider_name}", severity="error")
             return
-        if entry.kind == "openai-codex":
+        if entry.kind == "openai-codex" or entry.name == "github-copilot":
             self.push_screen(
                 OAuthLoginScreen(entry, theme=self.tui_settings.resolved_theme),
                 callback=lambda credential: self._handle_oauth_login_result(entry, credential),
@@ -2882,16 +2961,15 @@ class TauTuiApp(App[None]):
         )
         self.notify(message, severity=severity, markup=False)
 
-    def _refresh(self) -> None:
+    def _refresh(self, *, scroll_end: bool = False) -> None:
         theme = self.tui_settings.resolved_theme
         self._refresh_chrome(theme=theme)
         transcript = self.query_one("#transcript", TranscriptView)
-        transcript.update_from_state(self.state, theme=theme)
+        transcript.update_from_state(self.state, theme=theme, scroll_end=scroll_end)
 
     def _refresh_chrome(self, *, theme: TuiTheme | None = None) -> None:
         """Refresh non-transcript chrome without remounting transcript blocks."""
         theme = theme or self.tui_settings.resolved_theme
-        self._sync_header_title()
         self._sync_text_selection_state()
         self._sync_queue_state()
         sidebar = self.query_one("#sidebar", SessionSidebar)
@@ -3026,7 +3104,8 @@ class TauTuiApp(App[None]):
         )
 
     def _update_responsive_layout(self, width: int, height: int) -> None:
-        show_sidebar = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
+        enough_space = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
+        show_sidebar = self.tui_settings.show_sidebar and enough_space
         self.set_class(not show_sidebar, "-hide-sidebar")
 
     def _build_completion_state(self, text: str) -> CompletionState:
@@ -3354,12 +3433,6 @@ def _named_session_title(title: str | None) -> str | None:
     return stripped
 
 
-def _session_header_sub_title(session: CodingSession) -> str:
-    """Return the session label shown beside Tau in the TUI header."""
-    title = _named_session_title(getattr(session, "session_title", None))
-    return title or "Untitled session"
-
-
 def _login_provider_label(provider: ProviderCatalogEntry) -> str:
     return f"{provider.display_name}\n  {provider.name}"
 
@@ -3367,13 +3440,21 @@ def _login_provider_label(provider: ProviderCatalogEntry) -> str:
 def _subscription_login_providers(
     providers: Sequence[ProviderCatalogEntry],
 ) -> tuple[ProviderCatalogEntry, ...]:
-    return tuple(provider for provider in providers if provider.kind == "openai-codex")
+    return tuple(
+        provider
+        for provider in providers
+        if provider.kind == "openai-codex" or provider.name == "github-copilot"
+    )
 
 
 def _api_key_login_providers(
     providers: Sequence[ProviderCatalogEntry],
 ) -> tuple[ProviderCatalogEntry, ...]:
-    return tuple(provider for provider in providers if provider.kind != "openai-codex")
+    return tuple(
+        provider
+        for provider in providers
+        if provider.kind != "openai-codex" and provider.name != "github-copilot"
+    )
 
 
 def _stored_credential_providers(
@@ -3553,6 +3634,7 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
             priority=True,
         ),
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
+        Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
         Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
         Binding(keybindings.quit, "quit", "Quit"),
@@ -3584,6 +3666,7 @@ def _prompt_bindings(
                 priority=True,
             ),
             Binding(keybindings.cancel, "cancel", "Close", priority=True),
+            Binding("ctrl+c", "cancel", "Close", show=False, priority=True),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     if mode == "running":
@@ -3591,6 +3674,7 @@ def _prompt_bindings(
             Binding("enter", "submit_prompt", "Steer", priority=True),
             Binding(keybindings.queue_follow_up, "submit_follow_up", "Follow-up", priority=True),
             Binding(keybindings.cancel, "cancel", "Cancel", priority=True),
+            Binding("ctrl+c", "cancel", "Cancel", show=False, priority=True),
             Binding(
                 keybindings.toggle_thinking,
                 "toggle_thinking",
@@ -3603,6 +3687,7 @@ def _prompt_bindings(
                 "Tools",
                 priority=True,
             ),
+            Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     bindings = [
@@ -3612,6 +3697,7 @@ def _prompt_bindings(
         Binding(keybindings.session_picker, "open_session_picker", "Sessions", priority=True),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
+        Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         Binding(
             keybindings.copy_message,
             "clear_prompt",
@@ -3628,7 +3714,11 @@ def _hidden_prompt_bindings(
     *,
     visible_bindings: Sequence[Binding],
 ) -> list[Binding]:
-    visible_keys = {key for binding in visible_bindings for key in binding.key.split(",")}
+    visible_keys = {
+        key.strip()
+        for binding in visible_bindings
+        for key in binding.key.split(",")
+    }
     candidates = (
         (keybindings.command_palette, "open_command_palette"),
         (keybindings.session_picker, "open_session_picker"),
@@ -3636,6 +3726,7 @@ def _hidden_prompt_bindings(
         (keybindings.thinking_cycle, "cycle_thinking"),
         (keybindings.model_cycle, "cycle_model"),
         (keybindings.toggle_tool_results, "toggle_tool_results"),
+        (keybindings.toggle_sidebar, "toggle_sidebar"),
         (keybindings.toggle_thinking, "toggle_thinking"),
         (keybindings.copy_message, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
@@ -3801,13 +3892,16 @@ async def run_tui_app(
     initial_prompt: str | None = None,
     session_manager: SessionManager | None = None,
     startup_notice: str | None = None,
-    startup_notices: Sequence[str] = (),
 ) -> None:
     """Create the default provider/session and run the Textual app."""
     if new_session and session_id is not None:
         raise RuntimeError("--resume and --new-session cannot be used together")
 
     provider_settings = load_provider_settings()
+    for provider in provider_settings.providers:
+        provider_settings = await ensure_dynamic_provider_models(
+            provider_settings, provider_name=provider.name
+        )
     shell_settings = load_shell_settings()
     manager = session_manager or SessionManager()
     record = _explicit_resume_record(
@@ -3823,11 +3917,16 @@ async def run_tui_app(
     )
     startup_message: str | None = None
     runtime_provider_config: ProviderConfig | None = selection.provider
+    llm_observer = llm_observer_from_env()
     try:
+        startup_thinking_level = provider_default_thinking_level(
+            selection.provider, model=selection.model
+        )
         provider = create_model_provider(
             selection.provider,
             model=selection.model,
-            thinking_level=DEFAULT_THINKING_LEVEL,
+            thinking_level=startup_thinking_level,
+            llm_observer=llm_observer,
         )
     except RuntimeError:
         login_required_message = (
@@ -3862,15 +3961,14 @@ async def run_tui_app(
                 auto_compact_token_threshold=auto_compact_token_threshold,
                 index_on_first_persist=index_on_first_persist,
                 shell_command_prefix=shell_settings.shell_command_prefix,
+                llm_observer=llm_observer,
             )
         )
-        legacy_notices = (startup_notice,) if startup_notice else ()
-        all_startup_notices = tuple((*startup_notices, *legacy_notices))
         app = TauTuiApp(
             session,
             tui_settings=load_tui_settings(),
             startup_message=startup_message,
-            startup_notices=all_startup_notices,
+            startup_notice=startup_notice,
             initial_prompt=initial_prompt,
         )
         await app.run_async()
