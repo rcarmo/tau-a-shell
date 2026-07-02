@@ -41,3 +41,17 @@ def test_default_session_path_uses_home_sessions_and_readable_project_path(
     assert "repos-exploration-tau-" in session_path.parent.name
     assert len(session_path.parent.name.rsplit("-", maxsplit=1)[-1]) == 6
     assert session_path.parent.exists()
+
+
+def test_tau_paths_default_user_dir_falls_back_to_cwd(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("TAU_HOME", raising=False)
+    monkeypatch.delenv("TAU_AGENTS_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing" / "home")
+    monkeypatch.chdir(tmp_path)
+
+    paths = TauPaths()
+
+    assert paths.home.exists()
+    assert paths.agents_home.exists()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -16,8 +17,10 @@ class TauPaths:
     loading project-local resources from the active working directory.
     """
 
-    home: Path = field(default_factory=lambda: Path.home() / ".tau")
-    agents_home: Path = field(default_factory=lambda: Path.home() / ".agents")
+    home: Path = field(default_factory=lambda: _default_user_dir("TAU_HOME", ".tau", "tau"))
+    agents_home: Path = field(
+        default_factory=lambda: _default_user_dir("TAU_AGENTS_HOME", ".agents", "agents")
+    )
 
     @property
     def sessions_dir(self) -> Path:
@@ -95,6 +98,29 @@ class TauPaths:
         path = self.project_session_dir(cwd) / "default.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+
+def _default_user_dir(env_name: str, home_name: str, app_name: str) -> Path:
+    """Return a writable user-data directory, with iOS/a-Shell friendly fallbacks."""
+    if override := os.environ.get(env_name):
+        return Path(override).expanduser()
+
+    candidates = [Path.home() / home_name]
+    try:
+        from platformdirs import user_data_path
+    except Exception:  # noqa: BLE001 - platformdirs is optional at import time
+        pass
+    else:
+        candidates.append(Path(user_data_path(app_name, appauthor=False)))
+    candidates.append(Path.cwd() / home_name)
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        return candidate
+    return Path.cwd() / home_name
 
 
 def _slugify_path(path: Path, *, max_length: int = 72) -> str:

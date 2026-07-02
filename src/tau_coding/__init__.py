@@ -149,7 +149,7 @@ from tau_coding.tools import (
     create_write_tool_definition,
 )
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 __all__ = [
     "__version__",
