@@ -443,7 +443,7 @@ class SessionPickerScreen(ModalScreen[str | None]):
     """Minimal modal picker for indexed sessions."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Select", show=False),
@@ -524,7 +524,7 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
     """Modal picker for branching from a previous session entry."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Branch", show=False),
@@ -683,7 +683,7 @@ class TreePickerScreen(ModalScreen[TreePickerResult | None]):
 class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
     """Prompt for custom branch-summary instructions."""
 
-    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS: ClassVar[list[BindingEntry]] = [Binding("escape,ctrl+c", "cancel", "Cancel")]
 
     def __init__(self, *, theme: TuiTheme) -> None:
         super().__init__()
@@ -711,7 +711,7 @@ class BranchSummaryInstructionsScreen(ModalScreen[str | None]):
         if event.key == "ctrl+enter":
             event.stop()
             self.action_submit()
-        elif event.key == "escape":
+        elif event.key in {"escape", "ctrl+c"}:
             event.stop()
             self.action_cancel()
 
@@ -746,7 +746,7 @@ class CommandOutputScreen(ModalScreen[None]):
     """Dismissible modal for slash-command output."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "close", "Close"),
+        Binding("escape,ctrl+c", "close", "Close"),
         Binding("enter", "close", "Close"),
         Binding("up", "scroll_up", "Scroll up", show=False, priority=True),
         Binding("down", "scroll_down", "Scroll down", show=False, priority=True),
@@ -796,7 +796,7 @@ class LoginProviderPickerScreen(ModalScreen[str | None]):
     """Provider picker for the TUI login flow."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
         Binding("enter", "select_cursor", "Select", show=False),
@@ -870,7 +870,7 @@ class LoginMethodPickerScreen(ModalScreen[str | None]):
     """Login method picker for the TUI login flow."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
         Binding("down", "cursor_down", "Down", show=False, priority=True),
         Binding("enter", "select_cursor", "Select", show=False, priority=True),
@@ -980,7 +980,7 @@ class ThemePickerScreen(ModalScreen[TuiThemeName | None]):
     """Theme picker for the built-in TUI themes."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
         Binding("down", "cursor_down", "Down", show=False, priority=True),
         Binding("enter", "select_cursor", "Select", show=False, priority=True),
@@ -1055,7 +1055,7 @@ class ModelPickerSearchInput(Input):
     """Search input that keeps model-picker control keys local to the picker."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel", show=False, priority=True),
+        Binding("escape,ctrl+c", "cancel", "Cancel", show=False, priority=True),
         Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
         Binding("up", "cursor_up", "Up", show=False, priority=True),
@@ -1079,7 +1079,7 @@ class ModelPickerSearchInput(Input):
             event.stop()
             event.prevent_default()
             self.action_toggle_mode()
-        elif event.key == "escape":
+        elif event.key in {"escape", "ctrl+c"}:
             event.stop()
             event.prevent_default()
             self.action_cancel()
@@ -1105,7 +1105,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     """Model picker for the active TUI provider."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
         Binding("tab", "toggle_mode", "Mode", show=False, priority=True),
         Binding("ctrl+i", "toggle_mode", "Mode", show=False, priority=True),
         Binding("up", "cursor_up", "Up", show=False),
@@ -1321,7 +1321,7 @@ class LoginScreen(ModalScreen[str | None]):
     """Password prompt for saving a provider API key."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
     ]
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
@@ -1357,7 +1357,7 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
     """OAuth login flow for providers backed by subscription auth."""
 
     BINDINGS: ClassVar[list[BindingEntry]] = [
-        Binding("escape", "cancel", "Cancel"),
+        Binding("escape,ctrl+c", "cancel", "Cancel"),
     ]
 
     def __init__(self, provider: ProviderCatalogEntry, *, theme: TuiTheme) -> None:
@@ -3581,6 +3581,7 @@ def _prompt_bindings(
                 priority=True,
             ),
             Binding(keybindings.cancel, "cancel", "Close", priority=True),
+            Binding("ctrl+c", "cancel", "Close", show=False, priority=True),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     if mode == "running":
@@ -3588,6 +3589,7 @@ def _prompt_bindings(
             Binding("enter", "submit_prompt", "Steer", priority=True),
             Binding(keybindings.queue_follow_up, "submit_follow_up", "Follow-up", priority=True),
             Binding(keybindings.cancel, "cancel", "Cancel", priority=True),
+            Binding("ctrl+c", "cancel", "Cancel", show=False, priority=True),
             Binding(
                 keybindings.toggle_thinking,
                 "toggle_thinking",
@@ -3625,7 +3627,11 @@ def _hidden_prompt_bindings(
     *,
     visible_bindings: Sequence[Binding],
 ) -> list[Binding]:
-    visible_keys = {key for binding in visible_bindings for key in binding.key.split(",")}
+    visible_keys = {
+        key.strip()
+        for binding in visible_bindings
+        for key in binding.key.split(",")
+    }
     candidates = (
         (keybindings.command_palette, "open_command_palette"),
         (keybindings.session_picker, "open_session_picker"),

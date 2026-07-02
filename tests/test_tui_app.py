@@ -3131,7 +3131,7 @@ async def test_tui_app_command_modal_uses_centered_picker_style() -> None:
 
 
 @pytest.mark.anyio
-async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
+async def test_tui_app_ctrl_c_cancels_running_session_from_prompt() -> None:
     class RunningSession(FakeSession):
         @property
         def is_running(self) -> bool:
@@ -3151,7 +3151,7 @@ async def test_tui_app_escape_cancels_running_session_from_prompt() -> None:
         app.adapter.apply(AgentStartEvent())
         app._refresh()
 
-        await pilot.press("escape")
+        await pilot.press("ctrl+c")
 
         assert session.cancel_count == 1
         assert app.state.running is False
