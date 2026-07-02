@@ -33,6 +33,7 @@ from tau_agent import (
 )
 from tau_coding.commands import CommandResult
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
+from tau_coding.oauth import OAuthAuthInfo
 from tau_coding.prompt_templates import PromptTemplate
 from tau_coding.provider_config import (
     OpenAICodexProviderConfig,
@@ -3333,6 +3334,60 @@ async def test_tui_login_openai_codex_saves_oauth_credentials(
     credentials = (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
     assert '"type": "oauth"' in credentials
     assert "refresh-token" in credentials
+
+
+@pytest.mark.anyio
+async def test_tui_login_github_copilot_starts_device_flow_without_enterprise_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    credential_future = asyncio.get_running_loop().create_future()
+    login_kwargs: dict[str, object] = {}
+
+    async def fake_login_github_copilot(**kwargs: object) -> OAuthCredential:
+        login_kwargs.update(kwargs)
+        on_auth = kwargs["on_auth"]
+        assert callable(on_auth)
+        on_auth(
+            OAuthAuthInfo(
+                url="https://github.com/login/device",
+                instructions="Enter code: ABCD-1234",
+            )
+        )
+        return await credential_future
+
+    monkeypatch.setattr(tui_app, "login_github_copilot", fake_login_github_copilot)
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt")
+        prompt.value = "/login github-copilot"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, OAuthLoginScreen)
+        assert "on_prompt" not in login_kwargs
+        assert str(app.screen.query_one("#login-oauth-url", Static).render()) == (
+            "https://github.com/login/device"
+        )
+        assert str(app.screen.query_one("#login-help", Static).render()) == "Enter code: ABCD-1234"
+        assert app.screen.query_one("#login-oauth-code", Input).disabled is True
+        credential_future.set_result(
+            OAuthCredential(
+                access="copilot-token",
+                refresh="github-token",
+                expires=123456,
+                account_id="github.com",
+            )
+        )
+        await pilot.pause()
+
+    assert session.provider_name == "github-copilot"
+    credentials = (tmp_path / ".tau" / "credentials.json").read_text(encoding="utf-8")
+    assert '"type": "oauth"' in credentials
+    assert "github-token" in credentials
 
 
 @pytest.mark.anyio

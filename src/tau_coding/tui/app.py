@@ -1369,13 +1369,20 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
 
     def compose(self) -> ComposeResult:
         """Compose the OAuth login prompt."""
+        if self.provider.name == "github-copilot":
+            help_text = "Starting GitHub device login..."
+            placeholder = "Waiting for device code"
+        else:
+            help_text = "Complete the browser login, or paste the redirect URL."
+            placeholder = "Paste redirect URL or authorization code"
         with Vertical(id="login-screen"):
             yield Static(f"Login: {self.provider.display_name}", id="login-title")
-            yield Static("Complete the browser login, or paste the redirect URL.", id="login-help")
+            yield Static(help_text, id="login-help")
             yield Static("", id="login-oauth-url")
             yield Input(
-                placeholder="Paste redirect URL or authorization code",
+                placeholder=placeholder,
                 id="login-oauth-code",
+                disabled=self.provider.name == "github-copilot",
             )
             yield Static("Enter submits - Escape closes", id="login-footer")
 
@@ -1389,7 +1396,6 @@ class OAuthLoginScreen(ModalScreen[OAuthCredential | None]):
             if self.provider.name == "github-copilot":
                 credential = await login_github_copilot(
                     on_auth=self._show_auth,
-                    on_prompt=self._prompt_for_code,
                 )
             else:
                 credential = await login_openai_codex(
