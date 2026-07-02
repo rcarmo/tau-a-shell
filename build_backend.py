@@ -126,6 +126,9 @@ def _source_files() -> list[Path]:
 def _package_files() -> list[tuple[Path, str]]:
     files: list[tuple[Path, str]] = []
     src = ROOT / "src"
+    shim = src / "pydantic.py"
+    if shim.exists():
+        files.append((shim, "pydantic.py"))
     for package in ("tau_ai", "tau_agent", "tau_coding"):
         package_root = src / package
         for path in package_root.rglob("*.py"):
