@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import Literal
 
 from tau_agent import (
     AgentEvent,
@@ -107,7 +107,6 @@ from tau_coding.thinking import (
 from tau_coding.tools import create_bash_tool, create_coding_tools
 
 StreamingBehavior = Literal["steer", "follow_up"]
-_UNSET_LEAF_ID: Final[object] = object()
 TREE_RUNNING_MESSAGE = "Tau is still working. Press Escape to interrupt before using /tree."
 
 
@@ -1301,17 +1300,9 @@ class CodingSession:
         await self._refresh_persisted_state(leaf_id=self._last_parent_id)
         return persisted_count + len(new_messages)
 
-    async def _refresh_persisted_state(
-        self,
-        *,
-        leaf_id: str | None | object = _UNSET_LEAF_ID,
-    ) -> None:
+    async def _refresh_persisted_state(self, *, leaf_id: str | None) -> None:
         entries = await self._read_session_entries()
-        self._state = (
-            SessionState.from_entries(entries)
-            if leaf_id is _UNSET_LEAF_ID
-            else SessionState.from_entries(entries, leaf_id=cast(str | None, leaf_id))
-        )
+        self._state = SessionState.from_entries(entries, leaf_id=leaf_id)
         if self._config.session_id is not None and self._config.session_manager is not None:
             self._config.session_manager.touch_session(
                 self._config.session_id,
