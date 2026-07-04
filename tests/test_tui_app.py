@@ -4369,7 +4369,7 @@ async def test_tui_prompt_worker_refreshes_directly() -> None:
     app = TauTuiApp(FakeSession(events=[AgentStartEvent(), AgentEndEvent()]))
     refreshes = 0
 
-    def fake_refresh() -> None:
+    def fake_refresh(**_kwargs: object) -> None:
         nonlocal refreshes
         refreshes += 1
 
@@ -4458,7 +4458,7 @@ async def test_tui_prompt_worker_refreshes_context_after_message_changes() -> No
     app = TauTuiApp(session)
     observed_context: list[int] = []
 
-    def fake_refresh() -> None:
+    def fake_refresh(**_kwargs: object) -> None:
         observed_context.append(session.context_token_estimate)
 
     app._refresh = fake_refresh  # type: ignore[method-assign]
@@ -4480,7 +4480,7 @@ async def test_tui_resume_refreshes_context_after_session_swap() -> None:
     observed_context: list[int] = []
     notifications: list[str] = []
 
-    def fake_refresh() -> None:
+    def fake_refresh(**_kwargs: object) -> None:
         observed_context.append(session.context_token_estimate)
 
     def fake_notify(message: str, **kwargs: object) -> None:

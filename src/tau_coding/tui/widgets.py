@@ -365,6 +365,7 @@ class TranscriptView(VerticalScroll):
         """Return to follow mode for a user-driven turn or explicit jump to bottom."""
         self._follow_output = True
         self.anchor(False)
+        self.scroll_end(animate=False, immediate=True)
         self._request_follow_scroll(force=True)
 
     def _request_follow_scroll(self, *, force: bool = False) -> None:

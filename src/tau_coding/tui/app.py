@@ -2090,7 +2090,7 @@ class TauTuiApp(App[None]):
                     self._append_command_message(text, command.message)
                 else:
                     self._show_command_message(text, command.message)
-            self._refresh()
+            self._refresh(scroll_end=True)
             if command.exit_requested:
                 self.exit()
             return
@@ -2306,7 +2306,7 @@ class TauTuiApp(App[None]):
             return
         if isinstance(event, MessageEndEvent):
             if event.message.role == "user":
-                self._refresh()
+                self._refresh(scroll_end=True)
                 return
             if event.message.role == "assistant":
                 await transcript.finish_assistant_message(event.message.content, scroll_end=True)
@@ -2550,7 +2550,8 @@ class TauTuiApp(App[None]):
     def action_toggle_thinking(self) -> None:
         """Toggle thinking-token display in the transcript."""
         self.state.toggle_thinking()
-        self._refresh()
+        self._follow_transcript_output()
+        self._refresh(scroll_end=True)
 
     def _handle_session_picker_result(self, session_id: str | None) -> None:
         if session_id is None:
@@ -2563,10 +2564,11 @@ class TauTuiApp(App[None]):
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
+            self._follow_transcript_output()
             self._notify(resume_message)
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
-        self._refresh()
+        self._refresh(scroll_end=True)
 
     async def _open_tree_picker(self) -> None:
         tree_choices = getattr(self.session, "tree_choices", None)
@@ -2613,7 +2615,8 @@ class TauTuiApp(App[None]):
             if summarize:
                 self.state.clear()
                 self.state.add_item("status", "Summarizing branch…")
-                self._refresh()
+                self._follow_transcript_output()
+                self._refresh(scroll_end=True)
 
             result = branch_to_entry(
                 entry_id,
@@ -2625,6 +2628,7 @@ class TauTuiApp(App[None]):
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
+            self._follow_transcript_output()
             if isinstance(result, SessionTreeBranchResult):
                 if result.input_prefill is not None:
                     prompt = self.query_one("#prompt", PromptInput)
@@ -2636,7 +2640,7 @@ class TauTuiApp(App[None]):
                 self._notify(result)
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
-        self._refresh()
+        self._refresh(scroll_end=True)
 
     async def _new_session(self) -> None:
         self._cancel_active_prompt(notify=False, interrupt=True)
@@ -2649,9 +2653,10 @@ class TauTuiApp(App[None]):
             self.state.clear()
             self.state.set_skills(self.session.skills)
             self._load_session_messages_from_session()
+            self._follow_transcript_output()
         except Exception as exc:  # noqa: BLE001 - surface command failures in the TUI
             self._notify(f"Error: {exc}", severity="error")
-        self._refresh()
+        self._refresh(scroll_end=True)
 
     def _apply_selected_completion(self, value: str) -> str | None:
         item = self._completion_state.selected
@@ -2918,7 +2923,8 @@ class TauTuiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
             self._notify(f"Could not change thinking mode: {exc}", severity="error")
             return
-        self._refresh()
+        self._follow_transcript_output()
+        self._refresh(scroll_end=True)
 
     async def _cycle_thinking_level(self) -> None:
         cycler = getattr(self.session, "cycle_thinking_level", None)
@@ -2932,7 +2938,8 @@ class TauTuiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
             self._notify(f"Could not change thinking mode: {exc}", severity="error")
             return
-        self._refresh()
+        self._follow_transcript_output()
+        self._refresh(scroll_end=True)
 
     async def _cycle_scoped_model(self) -> None:
         cycler = getattr(self.session, "cycle_scoped_model", None)
@@ -2946,7 +2953,8 @@ class TauTuiApp(App[None]):
         except Exception as exc:  # noqa: BLE001 - surface session state failures in the TUI
             self._notify(f"Could not switch scoped model: {exc}", severity="error")
             return
-        self._refresh()
+        self._follow_transcript_output()
+        self._refresh(scroll_end=True)
 
     def _notify(
         self,
