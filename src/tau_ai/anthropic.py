@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+from hashlib import sha1
 from json import loads
 from typing import Any
 
@@ -81,6 +82,7 @@ class AnthropicProvider:
                 thinking_budget_tokens=self._config.thinking_budget_tokens,
                 thinking_type=self._config.thinking_type,
             )
+            _sanitize_anthropic_payload_tool_ids(payload)
             headers = {
                 **(dict(self._config.headers or {})),
                 "anthropic-version": ANTHROPIC_VERSION,
@@ -404,7 +406,7 @@ def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
             content.append(
                 {
                     "type": "tool_use",
-                    "id": tool_call.id,
+                    "id": _anthropic_tool_id(tool_call.id),
                     "name": tool_call.name,
                     "input": tool_call.arguments,
                 }
@@ -416,13 +418,52 @@ def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
             "content": [
                 {
                     "type": "tool_result",
-                    "tool_use_id": message.tool_call_id,
+                    "tool_use_id": _anthropic_tool_id(message.tool_call_id),
                     "content": message.content,
                     "is_error": not message.ok,
                 }
             ],
         }
     raise TypeError(f"Unsupported message type: {type(message).__name__}")
+
+
+def _anthropic_tool_id(value: str) -> str:
+    """Return a tool-use id accepted by Anthropic's Messages API."""
+    cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value)
+    cleaned = cleaned.strip("_") or "tool_call"
+    if len(cleaned) <= 64:
+        return cleaned
+    suffix = "_" + sha1(value.encode("utf-8")).hexdigest()[:10]
+    return (cleaned[: 64 - len(suffix)].rstrip("_") or "tool_call") + suffix
+
+
+
+def _sanitize_anthropic_payload_tool_ids(payload: dict[str, JSONValue]) -> None:
+    """Defensively sanitize tool IDs in the final Anthropic payload."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    id_map: dict[str, str] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                raw = block.get("id")
+                if isinstance(raw, str):
+                    clean = _anthropic_tool_id(raw)
+                    id_map[raw] = clean
+                    block["id"] = clean
+            elif block.get("type") == "tool_result":
+                raw = block.get("tool_use_id")
+                if isinstance(raw, str):
+                    block["tool_use_id"] = id_map.get(raw, _anthropic_tool_id(raw))
+
 
 
 def _anthropic_tool(tool: AgentTool) -> dict[str, JSONValue]:

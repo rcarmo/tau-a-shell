@@ -1997,3 +1997,124 @@ async def test_anthropic_provider_can_use_bearer_auth_for_copilot() -> None:
     request = requests[0]
     assert request.headers["authorization"] == "Bearer copilot-token"
     assert "x-api-key" not in request.headers
+
+
+def test_codex_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> None:
+    from tau_ai.openai_codex import _messages_to_responses_input
+
+    foreign_id = "call_" + ("x" * 90) + "|fc.bad/id:with:separators"
+    items = _messages_to_responses_input(
+        [
+            AssistantMessage(
+                content="",
+                tool_calls=[ToolCall(id=foreign_id, name="", arguments={"path": "x"})],
+            ),
+            ToolResultMessage(tool_call_id=foreign_id, name="", content="ok", ok=True),
+        ]
+    )
+
+    assert items[0]["type"] == "function_call"
+    assert items[0]["name"] == "tool"
+    assert isinstance(items[0]["call_id"], str)
+    assert len(items[0]["call_id"]) <= 64
+    assert "|" not in items[0]["call_id"]
+    assert isinstance(items[0]["id"], str)
+    assert len(items[0]["id"]) <= 64
+    assert "." not in items[0]["id"]
+    assert "/" not in items[0]["id"]
+    assert ":" not in items[0]["id"]
+    assert items[1] == {
+        "type": "function_call_output",
+        "call_id": items[0]["call_id"],
+        "output": "ok",
+    }
+
+
+def test_openai_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> None:
+    from tau_ai.openai_compatible import _messages_to_responses_input
+
+    foreign_id = "call_" + ("x" * 90) + "|fc.bad/id:with:separators"
+    items = _messages_to_responses_input(
+        [
+            AssistantMessage(
+                content="",
+                tool_calls=[ToolCall(id=foreign_id, name="", arguments={"path": "x"})],
+            ),
+            ToolResultMessage(tool_call_id=foreign_id, name="", content="ok", ok=True),
+        ]
+    )
+
+    assert items[0]["type"] == "function_call"
+    assert items[0]["name"] == "tool"
+    assert isinstance(items[0]["call_id"], str)
+    assert len(items[0]["call_id"]) <= 64
+    assert "|" not in items[0]["call_id"]
+    assert items[1]["call_id"] == items[0]["call_id"]
+
+
+def test_anthropic_messages_payload_sanitizes_foreign_tool_ids() -> None:
+    from tau_ai.anthropic import _build_messages_payload
+
+    foreign_id = "call_" + ("x" * 90) + "|fc.bad/id:with:separators"
+    payload = _build_messages_payload(
+        model="claude-test",
+        system="system",
+        messages=[
+            AssistantMessage(
+                content="",
+                tool_calls=[ToolCall(id=foreign_id, name="read", arguments={"path": "x"})],
+            ),
+            ToolResultMessage(tool_call_id=foreign_id, name="read", content="ok", ok=True),
+        ],
+        tools=[],
+        thinking_budget_tokens=None,
+        thinking_type=None,
+    )
+
+    tool_use_id = payload["messages"][0]["content"][0]["id"]
+    tool_result_id = payload["messages"][1]["content"][0]["tool_use_id"]
+    assert tool_result_id == tool_use_id
+    assert len(tool_use_id) <= 64
+    assert "|" not in tool_use_id
+    assert "." not in tool_use_id
+    assert "/" not in tool_use_id
+    assert ":" not in tool_use_id
+
+
+@pytest.mark.anyio
+async def test_openai_chat_completions_replays_empty_tool_names_as_tool() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            OpenAICompatibleConfig(api_key="test-key", base_url="https://example.test/v1"),
+            client=client,
+        )
+        await _collect(
+            provider.stream_response(
+                model="gpt-5.1",
+                system="system",
+                messages=[
+                    AssistantMessage(
+                        content="",
+                        tool_calls=[ToolCall(id="call_1", name="", arguments={})],
+                    ),
+                    ToolResultMessage(tool_call_id="call_1", name="", content="ok", ok=True),
+                ],
+                tools=[],
+            )
+        )
+
+    payload = loads(requests[0].content)
+    assistant = next(message for message in payload["messages"] if message["role"] == "assistant")
+    tool = next(message for message in payload["messages"] if message["role"] == "tool")
+    assert assistant["tool_calls"][0]["function"]["name"] == "tool"
+    assert tool["name"] == "tool"
