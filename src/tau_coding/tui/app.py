@@ -3049,7 +3049,8 @@ class TauTuiApp(App[None]):
         self._refresh_footer_bindings()
 
     def _update_responsive_layout(self, width: int, height: int) -> None:
-        show_sidebar = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
+        enough_space = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
+        show_sidebar = self.tui_settings.show_sidebar and enough_space
         self.set_class(not show_sidebar, "-hide-sidebar")
 
     def _build_completion_state(self, text: str) -> CompletionState:
@@ -3630,6 +3631,7 @@ def _prompt_bindings(
                 "Tools",
                 priority=True,
             ),
+            Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     bindings = [
@@ -3639,6 +3641,7 @@ def _prompt_bindings(
         Binding(keybindings.session_picker, "open_session_picker", "Sessions", priority=True),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
+        Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         Binding(
             keybindings.copy_message,
             "clear_prompt",
@@ -3667,6 +3670,7 @@ def _hidden_prompt_bindings(
         (keybindings.thinking_cycle, "cycle_thinking"),
         (keybindings.model_cycle, "cycle_model"),
         (keybindings.toggle_tool_results, "toggle_tool_results"),
+        (keybindings.toggle_sidebar, "toggle_sidebar"),
         (keybindings.toggle_thinking, "toggle_thinking"),
         (keybindings.copy_message, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
