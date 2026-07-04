@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from hashlib import sha1
 from json import JSONDecodeError, dumps, loads
 from platform import machine, release, system
 from typing import Any
@@ -318,15 +319,16 @@ def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue
                 call_id, item_id = _split_tool_call_id(tool_call.id)
                 item: dict[str, JSONValue] = {
                     "type": "function_call",
-                    "call_id": call_id,
-                    "name": tool_call.name,
+                    "call_id": _codex_call_id(call_id),
+                    "name": tool_call.name or "tool",
                     "arguments": dumps(tool_call.arguments),
                 }
                 if item_id:
-                    item["id"] = item_id
+                    item["id"] = _codex_item_id(item_id)
                 items.append(item)
         elif isinstance(message, ToolResultMessage):
             call_id, _item_id = _split_tool_call_id(message.tool_call_id)
+            call_id = _codex_call_id(call_id)
             items.append(
                 {
                     "type": "function_call_output",
@@ -335,6 +337,27 @@ def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue
                 }
             )
     return items
+
+
+def _codex_identifier(value: str, *, fallback: str) -> str:
+    """Return a Codex Responses identifier safe for replayed transcript items."""
+    cleaned = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in value)
+    cleaned = cleaned.strip("_") or fallback
+    if len(cleaned) <= 64:
+        return cleaned
+    suffix = "_" + sha1(value.encode("utf-8")).hexdigest()[:10]
+    return (cleaned[: 64 - len(suffix)].rstrip("_") or fallback) + suffix
+
+
+
+def _codex_call_id(value: str) -> str:
+    return _codex_identifier(value, fallback="call")
+
+
+
+def _codex_item_id(value: str) -> str:
+    return _codex_identifier(value, fallback="item")
+
 
 
 def _tool_to_codex(tool: AgentTool) -> dict[str, JSONValue]:

@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from os import environ
 from typing import Protocol
 
+from tau_agent.messages import AgentMessage
+from tau_agent.tools import AgentTool
 from tau_ai import (
     AnthropicProvider,
+    CancellationToken,
     ModelProvider,
     OpenAICodexConfig,
     OpenAICodexCredentials,
     OpenAICodexProvider,
     OpenAICompatibleProvider,
+    ProviderEvent,
 )
 from tau_coding.credentials import FileCredentialStore, OAuthCredential
 from tau_coding.oauth import (
@@ -55,7 +60,11 @@ def create_model_provider(
     credentials = credential_store or FileCredentialStore()
     selected_model = model or provider.default_model
     if provider.name == "github-copilot":
-        provider = _github_copilot_provider_config(provider, credential_store=credentials)
+        return GitHubCopilotCredentialRefreshingProvider(
+            provider,
+            credential_store=credentials,
+            thinking_level=thinking_level,
+        )
     override = catalog_model_override(provider.name, selected_model)
     if (
         provider.name != "github-copilot"
@@ -156,6 +165,84 @@ def _github_copilot_headers() -> dict[str, str]:
         "Copilot-Integration-Id": "vscode-chat",
         "openai-intent": "conversation-panel",
     }
+
+
+class GitHubCopilotCredentialRefreshingProvider:
+    """GitHub Copilot provider wrapper with request-time OAuth refresh."""
+
+    def __init__(
+        self,
+        provider: ProviderConfig,
+        *,
+        credential_store: FileCredentialStore,
+        thinking_level: ThinkingLevel | None = None,
+    ) -> None:
+        self._provider = provider
+        self._credential_store = credential_store
+        self._thinking_level = thinking_level
+
+    async def aclose(self) -> None:
+        """No persistent HTTP client is owned by the wrapper."""
+
+    def stream_response(
+        self,
+        *,
+        model: str,
+        system: str,
+        messages: list[AgentMessage],
+        tools: list[AgentTool],
+        signal: CancellationToken | None = None,
+    ) -> AsyncIterator[ProviderEvent]:
+        """Refresh Copilot credentials, then delegate one streamed request."""
+
+        async def iterator() -> AsyncIterator[ProviderEvent]:
+            inner = await self._fresh_inner_provider(model=model)
+            try:
+                async for event in inner.stream_response(
+                    model=model,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    signal=signal,
+                ):
+                    yield event
+            finally:
+                await inner.aclose()
+
+        return iterator()
+
+    async def _fresh_inner_provider(self, *, model: str) -> ClosableModelProvider:
+        provider = await self._fresh_provider_config()
+        return OpenAICompatibleProvider(
+            openai_compatible_config_from_provider(
+                provider,
+                credential_reader=self._credential_store,
+                model=model,
+                thinking_level=self._thinking_level,
+            )
+        )
+
+    async def _fresh_provider_config(self) -> ProviderConfig:
+        headers = {**dict(self._provider.headers), **_github_copilot_headers()}
+        credential_name = self._provider.credential_name
+        if not credential_name:
+            return replace(self._provider, headers=headers)
+
+        credential = self._credential_store.get_oauth(credential_name)
+        if credential is None:
+            return replace(self._provider, headers=headers)
+        if oauth_credential_is_expired(credential):
+            credential = await refresh_github_copilot_token(
+                credential.refresh,
+                enterprise_domain=credential.account_id if credential.account_id != "github.com" else "",
+            )
+            self._credential_store.set_oauth(credential_name, credential)
+        return replace(
+            self._provider,
+            base_url=github_copilot_base_url(credential.access, credential.account_id),
+            headers=headers,
+        )
+
 
 
 def _anthropic_provider_config_for_model(
