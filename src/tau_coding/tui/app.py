@@ -1476,8 +1476,6 @@ class TauTuiApp(App[None]):
     }
 
     Footer {
-        dock: bottom;
-        height: 1;
         background: $tau-chrome-background;
         color: $tau-chrome-text;
     }
@@ -1845,7 +1843,6 @@ class TauTuiApp(App[None]):
         self._load_session_messages_from_session()
         self.adapter = TuiEventAdapter(self.state)
         self._prompt_worker: Worker[None] | None = None
-        self._completion_visible_line_budget: int | None = None
         self._compaction_worker: Worker[None] | None = None
         self._prompt_run_id = 0
         self._completion_state = CompletionState()
@@ -1930,7 +1927,6 @@ class TauTuiApp(App[None]):
 
     def on_resize(self, event: Resize) -> None:
         """Update responsive chrome when the terminal changes size."""
-        self._completion_visible_line_budget = None
         self._update_responsive_layout(event.size.width, event.size.height)
 
     def on_click(self, event: events.Click) -> None:
@@ -1957,7 +1953,6 @@ class TauTuiApp(App[None]):
         prompt = self.query_one("#prompt", PromptInput)
         prompt._detect_paste(event.text_area.text)
         self._sync_prompt_shell_mode(event.text_area.text)
-        self._completion_visible_line_budget = None
         self._completion_state = self._build_completion_state(event.text_area.text)
         self._refresh_completions()
 
@@ -3041,22 +3036,11 @@ class TauTuiApp(App[None]):
     def _refresh_completions(self) -> None:
         suggestions = self.query_one("#autocomplete", Static)
         suggestions.display = bool(self._completion_state.items)
-        if not self._completion_state.items:
-            self._completion_visible_line_budget = None
-            suggestions.update(
-                render_completion_suggestions(
-                    CompletionState(),
-                    theme=self.tui_settings.resolved_theme,
-                )
-            )
-            self._refresh_footer_bindings()
-            return
-        max_lines = self._completion_window_line_budget(suggestions)
         suggestions.update(
             render_completion_suggestions(
                 _visible_completion_state(
                     self._completion_state,
-                    max_lines=max_lines,
+                    max_lines=_completion_visible_line_limit(suggestions),
                     width=max(suggestions.content_size.width or suggestions.size.width, 1),
                 ),
                 theme=self.tui_settings.resolved_theme,
@@ -3064,51 +3048,8 @@ class TauTuiApp(App[None]):
         )
         self._refresh_footer_bindings()
 
-    def _completion_window_line_budget(self, suggestions: Static) -> int:
-        """Return a stable completion window size for the current suggestion box.
-
-        The autocomplete widget has ``height: auto``. If we used its current
-        rendered height as the next render limit unconditionally, selecting an
-        item could render fewer rows, which would shrink the widget, which would
-        then make the next render limit smaller again. Keep the largest measured
-        height for the current completion session so navigation does not feed
-        back into progressively smaller boxes.
-        """
-        measured_limit = _completion_visible_line_limit(suggestions)
-        if suggestions.size.height <= 0:
-            if self._completion_visible_line_budget is None:
-                self._completion_visible_line_budget = self._initial_completion_line_budget()
-            return self._completion_visible_line_budget
-        self._completion_visible_line_budget = max(
-            self._completion_visible_line_budget or measured_limit,
-            measured_limit,
-        )
-        return self._completion_visible_line_budget
-
-    def _initial_completion_line_budget(self) -> int:
-        """Estimate the first completion window size before Textual lays it out."""
-        terminal_height = self.size.height
-        if terminal_height <= 0:
-            return COMPLETION_MAX_VISIBLE_LINES
-
-        reserved_rows = COMPLETION_MIN_TRANSCRIPT_LINES + COMPLETION_WIDGET_CHROME_LINES
-        reserved_rows += 2  # Header and footer.
-        for selector in ("#prompt-row", "#compact-session-info", "#queued-messages"):
-            with suppress(NoMatches):
-                widget = self.query_one(selector)
-                if widget.display:
-                    reserved_rows += widget.outer_size.height
-
-        available_rows = terminal_height - reserved_rows
-        terminal_fraction_rows = max(1, terminal_height // COMPLETION_INITIAL_TERMINAL_FRACTION)
-        return max(
-            1,
-            min(COMPLETION_MAX_VISIBLE_LINES, available_rows, terminal_fraction_rows),
-        )
-
     def _update_responsive_layout(self, width: int, height: int) -> None:
-        enough_space = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
-        show_sidebar = self.tui_settings.show_sidebar and enough_space
+        show_sidebar = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
         self.set_class(not show_sidebar, "-hide-sidebar")
 
     def _build_completion_state(self, text: str) -> CompletionState:
@@ -3637,7 +3578,6 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
             priority=True,
         ),
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
-        Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
         Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
         Binding(keybindings.quit, "quit", "Quit"),
@@ -3690,7 +3630,6 @@ def _prompt_bindings(
                 "Tools",
                 priority=True,
             ),
-            Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         ]
         return bindings + _hidden_prompt_bindings(keybindings, visible_bindings=bindings)
     bindings = [
@@ -3700,7 +3639,6 @@ def _prompt_bindings(
         Binding(keybindings.session_picker, "open_session_picker", "Sessions", priority=True),
         Binding(keybindings.thinking_cycle, "cycle_thinking", "Thinking", priority=True),
         Binding(keybindings.model_cycle, "cycle_model", "Model", priority=True),
-        Binding(keybindings.toggle_sidebar, "toggle_sidebar", "Sidebar", priority=True),
         Binding(
             keybindings.copy_message,
             "clear_prompt",
@@ -3729,7 +3667,6 @@ def _hidden_prompt_bindings(
         (keybindings.thinking_cycle, "cycle_thinking"),
         (keybindings.model_cycle, "cycle_model"),
         (keybindings.toggle_tool_results, "toggle_tool_results"),
-        (keybindings.toggle_sidebar, "toggle_sidebar"),
         (keybindings.toggle_thinking, "toggle_thinking"),
         (keybindings.copy_message, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
