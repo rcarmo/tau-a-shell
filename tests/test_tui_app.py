@@ -2330,6 +2330,41 @@ async def test_tui_app_submits_multiline_prompt_with_enter() -> None:
 
 
 @pytest.mark.anyio
+async def test_tui_app_ignores_empty_prompt_submission_without_rewriting_editor() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        assert prompt.text == ""
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.text == ""
+        assert prompt.cursor_location == (0, 0)
+
+    assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
+async def test_tui_app_clears_whitespace_only_prompt_submission() -> None:
+    session = FakeSession()
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.text = "   "
+        prompt.move_cursor((0, 3))
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.text == ""
+        assert prompt.cursor_location == (0, 0)
+
+    assert session.prompt_texts == []
+
+
+@pytest.mark.anyio
 async def test_tui_app_completes_custom_prompt_slash_command() -> None:
     session = FakeSession()
     session.prompt_templates = (

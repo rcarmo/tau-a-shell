@@ -1990,9 +1990,11 @@ class TauTuiApp(App[None]):
 
         text = raw_text.strip()
         if not text:
-            prompt.text = ""
-            self._completion_state = CompletionState()
-            self._refresh_completions()
+            if raw_text:
+                prompt.text = ""
+            if self._completion_state.items:
+                self._completion_state = CompletionState()
+                self._refresh_completions()
             return
 
         if self._is_compaction_active():
