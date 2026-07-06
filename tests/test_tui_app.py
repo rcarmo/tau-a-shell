@@ -1109,6 +1109,32 @@ async def test_transcript_message_widget_renders_full_height_role_block() -> Non
 
 
 @pytest.mark.anyio
+async def test_transcript_ignores_empty_live_thinking_deltas() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        transcript = app.query_one("#transcript", TranscriptView)
+        await transcript.append_thinking_delta(
+            "",
+            theme=app.tui_settings.resolved_theme,
+            show_thinking=True,
+        )
+        await transcript.append_thinking_delta(
+            "   \n",
+            theme=app.tui_settings.resolved_theme,
+            show_thinking=False,
+        )
+        await pilot.pause()
+
+        widgets = [
+            child
+            for child in transcript.children
+            if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
+        ]
+        assert widgets == []
+
+
+@pytest.mark.anyio
 async def test_streaming_transcript_deltas_do_not_force_scroll_end_during_scrollback() -> None:
     app = TauTuiApp(
         FakeSession(

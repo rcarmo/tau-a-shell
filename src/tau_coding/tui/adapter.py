@@ -73,7 +73,8 @@ class TuiEventAdapter:
             return
 
         if isinstance(event, ToolExecutionUpdateEvent):
-            self.state.add_item("tool", f"… {event.message}")
+            if event.message.strip():
+                self.state.add_item("tool", f"… {event.message}")
             return
 
         if isinstance(event, RetryEvent):

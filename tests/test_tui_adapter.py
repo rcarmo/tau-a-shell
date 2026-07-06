@@ -94,6 +94,17 @@ def test_tui_adapter_groups_thinking_deltas_separately() -> None:
     assert state.show_thinking is False
 
 
+def test_tui_adapter_ignores_empty_thinking_deltas() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+
+    adapter.apply(ThinkingDeltaEvent(delta=""))
+    adapter.apply(ThinkingDeltaEvent(delta="   \n"))
+    adapter.apply(ThinkingDeltaEvent(delta="plan"))
+
+    assert [(item.role, item.text) for item in state.items] == [("thinking", "plan")]
+
+
 def test_tui_adapter_flushes_assistant_buffer_before_tool_events() -> None:
     state = TuiState()
     adapter = TuiEventAdapter(state)
@@ -225,6 +236,21 @@ def test_tool_call_blocks_hide_raw_argument_fallbacks() -> None:
         )
         == "→ custom {'path': 'README.md'}"
     )
+
+
+def test_tool_result_blocks_skip_whitespace_only_content() -> None:
+    assert format_tool_result_block(name="read", ok=True, content="\n  \n") == "✓ read"
+
+
+def test_tui_adapter_ignores_empty_tool_updates() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+
+    adapter.apply(ToolExecutionUpdateEvent(tool_call_id="call-1", message=""))
+    adapter.apply(ToolExecutionUpdateEvent(tool_call_id="call-1", message="  \n"))
+    adapter.apply(ToolExecutionUpdateEvent(tool_call_id="call-1", message="reading"))
+
+    assert [(item.role, item.text) for item in state.items] == [("tool", "… reading")]
 
 
 def test_tui_adapter_records_tool_updates_and_results() -> None:

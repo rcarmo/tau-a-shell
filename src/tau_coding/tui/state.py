@@ -119,7 +119,9 @@ class TuiState:
             self.add_item("user", skill_invocation.additional_instructions)
 
     def add_thinking_delta(self, delta: str) -> None:
-        """Append a thinking/reasoning fragment to the current thinking block."""
+        """Append a visible thinking/reasoning fragment to the current block."""
+        if not delta.strip():
+            return
         if self.items and self.items[-1].role == "thinking":
             self.items[-1].text += delta
             return
@@ -333,7 +335,7 @@ def format_tool_result_block(
     """Format a tool result for live and restored transcript blocks."""
     status = "✓" if ok else "✗"
     lines = [f"{status} {name}"]
-    if content:
+    if content.strip():
         lines.append(_preview_text(content, max_lines=TOOL_RESULT_PREVIEW_LINES))
     patch = _result_patch(name=name, ok=ok, data=data)
     if patch:

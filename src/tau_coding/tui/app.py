@@ -2324,6 +2324,9 @@ class TauTuiApp(App[None]):
             )
             self._refresh_chrome()
             return
+        if isinstance(event, ToolExecutionUpdateEvent) and not event.message.strip():
+            self._refresh_chrome()
+            return
         if isinstance(event, ToolExecutionUpdateEvent | RetryEvent | ErrorEvent):
             await transcript.finish_assistant_message(scroll_end=True)
             if self.state.items:

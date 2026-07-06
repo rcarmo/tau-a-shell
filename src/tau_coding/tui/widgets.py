@@ -527,6 +527,8 @@ class TranscriptView(VerticalScroll):
         scroll_end: bool = False,
     ) -> None:
         """Append streamed thinking text or one hidden-thinking placeholder."""
+        if not delta.strip():
+            return
         should_follow = self._should_follow_output if not scroll_end else True
         if not show_thinking:
             if self._hidden_thinking_placeholder_visible:
