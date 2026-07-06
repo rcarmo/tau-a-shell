@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from os import environ
 from pathlib import Path
+import shutil
+import sys
 from typing import Annotated
 
 import anyio
@@ -171,6 +173,22 @@ def main(
             help="Automatically compact TUI context above this rough token estimate.",
         ),
     ] = None,
+    web: Annotated[
+        bool,
+        typer.Option("--web", help="Run the Textual TUI through Textual's web server."),
+    ] = False,
+    web_host: Annotated[
+        str,
+        typer.Option(
+            "--web-host",
+            "--web-address",
+            help="Host/address for Textual web server mode.",
+        ),
+    ] = "127.0.0.1",
+    web_port: Annotated[
+        int,
+        typer.Option("--web-port", help="Port for Textual web server mode."),
+    ] = 8000,
     version: Annotated[
         bool,
         typer.Option("--version", help="Show Tau's version and exit."),
@@ -239,17 +257,32 @@ def main(
             )
             raise typer.Exit()
         try:
-            anyio.run(
-                run_openai_tui,
-                model,
-                cwd or Path.cwd(),
-                resume,
-                new_session,
-                provider,
-                auto_compact_threshold,
-                initial_prompt,
-                notice,
-            )
+            if web:
+                anyio.run(
+                    run_textual_web_tui,
+                    model,
+                    cwd or Path.cwd(),
+                    resume,
+                    new_session,
+                    provider,
+                    auto_compact_threshold,
+                    initial_prompt,
+                    web_host,
+                    web_port,
+                    notice,
+                )
+            else:
+                anyio.run(
+                    run_openai_tui,
+                    model,
+                    cwd or Path.cwd(),
+                    resume,
+                    new_session,
+                    provider,
+                    auto_compact_threshold,
+                    initial_prompt,
+                    notice,
+                )
         except RuntimeError as exc:
             raise typer.BadParameter(str(exc)) from exc
         raise typer.Exit()
@@ -291,6 +324,85 @@ async def run_openai_tui(
         initial_prompt=initial_prompt,
         startup_notice=update_notice.message if update_notice is not None else None,
     )
+
+
+async def run_textual_web_tui(
+    model: str | None,
+    cwd: Path,
+    session_id: str | None = None,
+    new_session: bool = False,
+    provider_name: str | None = None,
+    auto_compact_token_threshold: int | None = None,
+    initial_prompt: str | None = None,
+    web_host: str = "127.0.0.1",
+    web_port: int = 8000,
+    update_notice: UpdateNotice | None = None,
+) -> None:
+    """Run the Textual TUI via Textual's optional web server command."""
+    if not 1 <= web_port <= 65535:
+        raise RuntimeError("--web-port must be between 1 and 65535")
+    command = _textual_web_command(
+        model=model,
+        cwd=cwd,
+        session_id=session_id,
+        new_session=new_session,
+        provider_name=provider_name,
+        auto_compact_token_threshold=auto_compact_token_threshold,
+        initial_prompt=initial_prompt,
+        web_host=web_host,
+        web_port=web_port,
+        update_notice=update_notice,
+    )
+    result = await anyio.run_process(command, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Textual web server exited with status {result.returncode}")
+
+
+def _textual_web_command(
+    *,
+    model: str | None,
+    cwd: Path,
+    session_id: str | None,
+    new_session: bool,
+    provider_name: str | None,
+    auto_compact_token_threshold: int | None,
+    initial_prompt: str | None,
+    web_host: str,
+    web_port: int,
+    update_notice: UpdateNotice | None,
+) -> list[str]:
+    executable = shutil.which("textual-web") or shutil.which("textual-serve")
+    if executable is None:
+        raise RuntimeError(
+            "Textual web server support requires the optional `textual-web` command. "
+            "Install Textual's web server package, then run Tau with --web."
+        )
+
+    tau_command = [sys.executable, "-m", "tau_coding"]
+    if model is not None:
+        tau_command.extend(["--model", model])
+    if provider_name is not None:
+        tau_command.extend(["--provider", provider_name])
+    if session_id is not None:
+        tau_command.extend(["--resume", session_id])
+    if new_session:
+        tau_command.append("--new-session")
+    if auto_compact_token_threshold is not None:
+        tau_command.extend(["--auto-compact-threshold", str(auto_compact_token_threshold)])
+    tau_command.extend(["--cwd", str(cwd)])
+    del update_notice
+    if initial_prompt is not None:
+        tau_command.append(initial_prompt)
+
+    return [
+        executable,
+        "--host",
+        web_host,
+        "--port",
+        str(web_port),
+        "--",
+        *tau_command,
+    ]
 
 
 def _startup_update_notice() -> UpdateNotice | None:

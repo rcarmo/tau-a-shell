@@ -186,6 +186,100 @@ def test_cli_positional_prompt_invokes_tui_runner(
     assert calls == [(None, tmp_path, None, False, None, None, "explain this repo")]
 
 
+def test_cli_web_mode_invokes_textual_web_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[
+        tuple[str | None, Path, str | None, bool, str | None, int | None, str | None, str, int]
+    ] = []
+
+    async def fake_run_textual_web_tui(
+        model: str | None,
+        cwd: Path,
+        session_id: str | None,
+        new_session: bool,
+        provider_name: str | None,
+        auto_compact_token_threshold: int | None,
+        initial_prompt: str | None,
+        web_host: str,
+        web_port: int,
+        update_notice: object | None = None,
+    ) -> None:
+        del update_notice
+        calls.append(
+            (
+                model,
+                cwd,
+                session_id,
+                new_session,
+                provider_name,
+                auto_compact_token_threshold,
+                initial_prompt,
+                web_host,
+                web_port,
+            )
+        )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
+    monkeypatch.setattr(cli, "run_textual_web_tui", fake_run_textual_web_tui)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--web",
+            "--web-address",
+            "0.0.0.0",
+            "--web-port",
+            "9001",
+            "--model",
+            "gpt-test",
+            "inspect this",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [("gpt-test", tmp_path, None, False, None, None, "inspect this", "0.0.0.0", 9001)]
+
+
+def test_textual_web_command_includes_host_port_and_inner_tui_args(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/textual-web" if name == "textual-web" else None)
+    monkeypatch.setattr(cli.sys, "executable", "/usr/bin/python3")
+
+    command = cli._textual_web_command(
+        model="gpt-test",
+        cwd=tmp_path,
+        session_id="abc123",
+        new_session=False,
+        provider_name="copilot",
+        auto_compact_token_threshold=12345,
+        initial_prompt="hello web",
+        web_host="0.0.0.0",
+        web_port=9001,
+        update_notice=None,
+    )
+
+    assert command[:6] == ["/usr/bin/textual-web", "--host", "0.0.0.0", "--port", "9001", "--"]
+    assert command[6:] == [
+        "/usr/bin/python3",
+        "-m",
+        "tau_coding",
+        "--model",
+        "gpt-test",
+        "--provider",
+        "copilot",
+        "--resume",
+        "abc123",
+        "--auto-compact-threshold",
+        "12345",
+        "--cwd",
+        str(tmp_path),
+        "hello web",
+    ]
+
+
 @pytest.mark.anyio
 async def test_run_print_mode_prints_final_assistant_text(
     capsys: pytest.CaptureFixture[str], tmp_path: Path
