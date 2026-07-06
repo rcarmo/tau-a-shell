@@ -1437,6 +1437,42 @@ async def test_tui_message_start_does_not_mount_empty_assistant_message() -> Non
 
 
 @pytest.mark.anyio
+async def test_prompt_focused_transcript_scroll_keybindings_move_transcript() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(60, 12)) as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        transcript = app.query_one("#transcript", TranscriptView)
+        for index in range(60):
+            app.state.add_item("user", f"message {index}")
+        app._refresh(scroll_end=True)
+        prompt.focus()
+        await pilot.pause()
+        assert app.focused is prompt
+        assert transcript.scroll_y == transcript.max_scroll_y
+
+        await pilot.press("pageup")
+        await pilot.pause()
+        page_up_y = transcript.scroll_y
+        assert page_up_y < transcript.max_scroll_y
+        assert app.focused is prompt
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert transcript.scroll_y > page_up_y
+        assert app.focused is prompt
+
+        await pilot.press("ctrl+up")
+        await pilot.pause()
+        ctrl_up_y = transcript.scroll_y
+        assert ctrl_up_y < transcript.max_scroll_y
+
+        await pilot.press("alt+down")
+        await pilot.pause()
+        assert transcript.scroll_y > ctrl_up_y
+
+
+@pytest.mark.anyio
 async def test_transcript_state_refresh_reuses_unchanged_widgets() -> None:
     app = TauTuiApp(FakeSession(messages=[]))
 

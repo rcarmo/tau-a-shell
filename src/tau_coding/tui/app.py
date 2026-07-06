@@ -179,6 +179,14 @@ class CompletionActionTarget(Protocol):
 
     def action_toggle_thinking(self) -> None: ...
 
+    def action_scroll_transcript_up(self) -> None: ...
+
+    def action_scroll_transcript_down(self) -> None: ...
+
+    def action_page_transcript_up(self) -> None: ...
+
+    def action_page_transcript_down(self) -> None: ...
+
     def action_edit_queued_follow_up(self) -> bool: ...
 
     async def action_submit_prompt(self) -> None: ...
@@ -311,6 +319,22 @@ class PromptInput(TextArea):
     def action_toggle_thinking(self) -> None:
         """Toggle app-level thinking-token display."""
         self._completion_target().action_toggle_thinking()
+
+    def action_scroll_transcript_up(self) -> None:
+        """Scroll the transcript up without moving the prompt cursor."""
+        self._completion_target().action_scroll_transcript_up()
+
+    def action_scroll_transcript_down(self) -> None:
+        """Scroll the transcript down without moving the prompt cursor."""
+        self._completion_target().action_scroll_transcript_down()
+
+    def action_page_transcript_up(self) -> None:
+        """Page the transcript up without moving the prompt cursor."""
+        self._completion_target().action_page_transcript_up()
+
+    def action_page_transcript_down(self) -> None:
+        """Page the transcript down without moving the prompt cursor."""
+        self._completion_target().action_page_transcript_down()
 
     def action_clear_prompt(self) -> None:
         """Clear the current prompt."""
@@ -2556,6 +2580,41 @@ class TauTuiApp(App[None]):
         self._follow_transcript_output()
         self._refresh(scroll_end=True)
 
+    def action_scroll_transcript_up(self) -> None:
+        """Scroll the transcript up by a small amount."""
+        self._scroll_transcript_lines(-3)
+
+    def action_scroll_transcript_down(self) -> None:
+        """Scroll the transcript down by a small amount."""
+        self._scroll_transcript_lines(3)
+
+    def action_page_transcript_up(self) -> None:
+        """Scroll the transcript up by roughly one viewport."""
+        self._scroll_transcript_pages(-1)
+
+    def action_page_transcript_down(self) -> None:
+        """Scroll the transcript down by roughly one viewport."""
+        self._scroll_transcript_pages(1)
+
+    def _scroll_transcript_lines(self, delta: int) -> None:
+        transcript = self.query_one("#transcript", TranscriptView)
+        transcript._follow_output = False
+        transcript.scroll_to(
+            y=min(max(transcript.scroll_y + delta, 0), transcript.max_scroll_y),
+            animate=False,
+            immediate=True,
+        )
+
+    def _scroll_transcript_pages(self, pages: int) -> None:
+        transcript = self.query_one("#transcript", TranscriptView)
+        page_size = max(1, transcript.container_size.height - 2)
+        transcript._follow_output = False
+        transcript.scroll_to(
+            y=min(max(transcript.scroll_y + pages * page_size, 0), transcript.max_scroll_y),
+            animate=False,
+            immediate=True,
+        )
+
     def _handle_session_picker_result(self, session_id: str | None) -> None:
         if session_id is None:
             return
@@ -3601,6 +3660,10 @@ def _app_bindings(keybindings: TuiKeybindings) -> list[Binding]:
         ),
         Binding(keybindings.toggle_tool_results, "toggle_tool_results", "Tool results"),
         Binding(keybindings.toggle_thinking, "toggle_thinking", "Thinking tokens"),
+        Binding("ctrl+up,alt+up", "scroll_transcript_up", "Transcript up", show=False),
+        Binding("ctrl+down,alt+down", "scroll_transcript_down", "Transcript down", show=False),
+        Binding("pageup", "page_transcript_up", "Transcript page up", show=False),
+        Binding("pagedown", "page_transcript_down", "Transcript page down", show=False),
         Binding(keybindings.copy_message, "clear_prompt", "Clear input"),
         Binding(keybindings.quit, "quit", "Quit"),
     ]
@@ -3693,6 +3756,10 @@ def _hidden_prompt_bindings(
         (keybindings.toggle_tool_results, "toggle_tool_results"),
         (keybindings.toggle_sidebar, "toggle_sidebar"),
         (keybindings.toggle_thinking, "toggle_thinking"),
+        ("ctrl+up,alt+up", "scroll_transcript_up"),
+        ("ctrl+down,alt+down", "scroll_transcript_down"),
+        ("pageup", "page_transcript_up"),
+        ("pagedown", "page_transcript_down"),
         (keybindings.copy_message, "clear_prompt"),
         (keybindings.accept_completion, "accept_completion"),
         (keybindings.completion_next, "completion_next"),
