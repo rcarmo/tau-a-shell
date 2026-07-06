@@ -222,6 +222,7 @@ class TranscriptMessageWidget(Horizontal):
         show_tool_results: bool,
     ) -> None:
         self.item = item
+        self._show_tool_results = show_tool_results
         self.selection_text = transcript_item_selection_text(
             item,
             show_tool_results=show_tool_results,
@@ -420,48 +421,35 @@ class TranscriptView(VerticalScroll):
             return
         theme = self._render_theme
         self._last_render_width = self.scrollable_content_region.width
-        self.remove_children(
-            [
-                child
-                for child in self.children
-                if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
-            ]
-        )
-        self._active_assistant_widget = None
-        self._active_thinking_widget = None
-        self._hidden_thinking_placeholder_visible = False
-        hidden_thinking_placeholder = False
-        for item in state.items:
-            if item.role == "thinking" and not state.show_thinking:
-                if not hidden_thinking_placeholder:
-                    self.mount(
-                        TranscriptMessageWidget(
-                            ChatItem(
-                                role="thinking",
-                                text="Thinking… Press Ctrl+T to show thinking tokens.",
-                            ),
-                            theme=theme,
-                            show_tool_results=state.show_tool_results,
-                        )
-                    )
-                    hidden_thinking_placeholder = True
-                continue
-            hidden_thinking_placeholder = False
+        existing_widgets = [
+            child
+            for child in self.children
+            if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
+        ]
+        desired = _visible_transcript_items(state)
+        reusable_count = 0
+        for existing, (item, show_tool_results) in zip(existing_widgets, desired):
+            if _transcript_widget_key(existing) != _transcript_item_key(item, show_tool_results):
+                break
+            reusable_count += 1
+
+        stale_widgets = existing_widgets[reusable_count:]
+        if stale_widgets:
+            self.remove_children(stale_widgets)
+        for item, show_tool_results in desired[reusable_count:]:
             self.mount(
                 TranscriptMessageWidget(
                     item,
                     theme=theme,
-                    show_tool_results=state.show_tool_results or item.always_show_tool_result,
+                    show_tool_results=show_tool_results,
                 )
             )
-        if state.assistant_buffer:
-            self.mount(
-                TranscriptMessageWidget(
-                    ChatItem(role="assistant", text=state.assistant_buffer),
-                    theme=theme,
-                    show_tool_results=state.show_tool_results,
-                )
-            )
+
+        self._active_assistant_widget = None
+        self._active_thinking_widget = None
+        self._hidden_thinking_placeholder_visible = _has_hidden_thinking_placeholder(
+            desired
+        )
         self.refresh(layout=True)
         if scroll_end:
             self._request_follow_scroll()
@@ -600,6 +588,55 @@ class TranscriptView(VerticalScroll):
             for message in messages
             for line in message.selection_text.splitlines()
         )
+
+
+def _visible_transcript_items(state: TuiState) -> list[tuple[ChatItem, bool]]:
+    desired: list[tuple[ChatItem, bool]] = []
+    hidden_thinking_placeholder = False
+    for item in state.items:
+        if item.role == "thinking" and not state.show_thinking:
+            if not hidden_thinking_placeholder:
+                desired.append(
+                    (
+                        ChatItem(
+                            role="thinking",
+                            text="Thinking… Press Ctrl+T to show thinking tokens.",
+                        ),
+                        state.show_tool_results,
+                    )
+                )
+                hidden_thinking_placeholder = True
+            continue
+        hidden_thinking_placeholder = False
+        desired.append((item, state.show_tool_results or item.always_show_tool_result))
+    if state.assistant_buffer:
+        desired.append((ChatItem(role="assistant", text=state.assistant_buffer), state.show_tool_results))
+    return desired
+
+
+def _has_hidden_thinking_placeholder(desired: list[tuple[ChatItem, bool]]) -> bool:
+    return any(
+        item.role == "thinking" and item.text == "Thinking… Press Ctrl+T to show thinking tokens."
+        for item, _show_tool_results in desired
+    )
+
+
+def _transcript_item_key(item: ChatItem, show_tool_results: bool) -> tuple[object, ...]:
+    return (
+        item.role,
+        item.text,
+        item.tool_call_id,
+        item.tool_result_text,
+        item.always_show_tool_result,
+        show_tool_results,
+    )
+
+
+def _transcript_widget_key(
+    widget: TranscriptMessageWidget | StreamingTranscriptMessageWidget,
+) -> tuple[object, ...]:
+    show_tool_results = getattr(widget, "_show_tool_results", False)
+    return _transcript_item_key(widget.item, show_tool_results)
 
 
 def _transcript_widget(

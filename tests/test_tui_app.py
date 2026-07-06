@@ -1411,6 +1411,34 @@ async def test_tui_message_start_does_not_mount_empty_assistant_message() -> Non
 
 
 @pytest.mark.anyio
+async def test_transcript_state_refresh_reuses_unchanged_widgets() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        transcript = app.query_one("#transcript", TranscriptView)
+        for index in range(40):
+            app.state.add_item("user", f"message {index}")
+        transcript.update_from_state(app.state, theme=app.tui_settings.resolved_theme)
+        await pilot.pause()
+
+        original_widgets = [
+            child for child in transcript.children if isinstance(child, TranscriptMessageWidget)
+        ]
+        assert len(original_widgets) == 40
+
+        app.state.add_item("assistant", "new tail")
+        transcript.update_from_state(app.state, theme=app.tui_settings.resolved_theme)
+        await pilot.pause()
+
+        updated_widgets = [
+            child for child in transcript.children if isinstance(child, TranscriptMessageWidget)
+        ]
+        assert len(updated_widgets) == 41
+        assert updated_widgets[:40] == original_widgets
+        assert updated_widgets[-1].item.text == "new tail"
+
+
+@pytest.mark.anyio
 async def test_tui_streaming_deltas_update_active_message_without_full_refresh() -> None:
     session = FakeSession(
         events=[
