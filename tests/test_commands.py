@@ -112,6 +112,7 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
         "skill",
         "system",
         "theme",
+        "thinking",
         "tree",
     ]
 
@@ -251,6 +252,35 @@ def test_model_command_requests_picker_and_switches_models(tmp_path: Path) -> No
     assert switch_result.message == "Current model: other-model"
     assert session.model == "other-model"
     assert session.provider_reload_called is True
+
+
+def test_thinking_command_shows_and_sets_modes(tmp_path: Path) -> None:
+    session = FakeSession(tmp_path)
+    registry = create_default_command_registry()
+
+    status = registry.execute(session, "/thinking")
+    set_result = registry.execute(session, "/thinking high")
+    unknown = registry.execute(session, "/thinking maximum")
+
+    assert status.message is not None
+    assert "Thinking mode: medium" in status.message
+    assert "Available modes: off, minimal, low, medium, high, xhigh" in status.message
+    assert set_result.thinking_level == "high"
+    assert unknown.message is not None
+    assert "Unknown thinking mode" in unknown.message
+
+
+def test_thinking_command_explains_unavailable_modes(tmp_path: Path) -> None:
+    session = FakeSession(tmp_path)
+    session.available_thinking_levels = ()
+    session.thinking_unavailable_reason = "Provider local does not declare thinking_levels"
+
+    result = create_default_command_registry().execute(session, "/thinking high")
+
+    assert result.message == (
+        "Thinking controls are unavailable for openai:fake-model: "
+        "Provider local does not declare thinking_levels"
+    )
 
 
 def test_scoped_models_command_requests_scoped_picker(tmp_path: Path) -> None:

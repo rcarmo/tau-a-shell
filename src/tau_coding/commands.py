@@ -322,6 +322,15 @@ def create_default_command_registry() -> CommandRegistry:
     )
     registry.register(
         SlashCommand(
+            name="thinking",
+            usage="/thinking [mode]",
+            description="Show or set the active thinking mode.",
+            handler=_thinking_command,
+            search_terms=("reasoning", "effort", "mode"),
+        )
+    )
+    registry.register(
+        SlashCommand(
             name="theme",
             usage="/theme [name]",
             description="Show or set the TUI theme.",
