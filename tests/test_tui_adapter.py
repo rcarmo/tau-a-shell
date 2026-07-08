@@ -245,7 +245,22 @@ def test_tool_call_blocks_hide_raw_argument_fallbacks() -> None:
                 arguments={"path": "README.md", "_raw_arguments": "{not valid json"},
             )
         )
-        == "→ custom {'path': 'README.md'}"
+        == "→ custom path='README.md'"
+    )
+    assert (
+        format_tool_call_block(
+            ToolCall(
+                id="call-nested",
+                name="custom",
+                arguments={
+                    "query": "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+                    "items": ["one", "two"],
+                    "options": {"deep": True},
+                    "extra": "hidden",
+                },
+            )
+        )
+        == "→ custom query='alpha beta gamma delta epsilon zeta eta theta…' items=[2 items] options={1 key} +1 more"
     )
 
 

@@ -38,6 +38,10 @@ from tau_coding.tui.config import TAU_DARK_THEME, TuiRoleStyle, TuiTheme
 from tau_coding.tui.state import ChatItem, TuiState
 
 TAU_SIDEBAR_LOGO = "τ = 2π"
+HIDDEN_THINKING_PLACEHOLDER = "Thinking… Press Ctrl+T to show thinking tokens."
+TRUNCATED_THINKING_PLACEHOLDER = "Earlier thinking hidden to keep the TUI responsive."
+MAX_VISIBLE_THINKING_ITEMS = 20
+MAX_VISIBLE_THINKING_CHARS = 20_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,7 +542,7 @@ class TranscriptView(VerticalScroll):
             await self.append_item(
                 ChatItem(
                     role="thinking",
-                    text="Thinking… Press Ctrl+T to show thinking tokens.",
+                    text=HIDDEN_THINKING_PLACEHOLDER,
                 ),
                 theme=theme,
                 scroll_end=should_follow,
@@ -598,31 +602,57 @@ class TranscriptView(VerticalScroll):
 
 def _visible_transcript_items(state: TuiState) -> list[tuple[ChatItem, bool]]:
     desired: list[tuple[ChatItem, bool]] = []
-    hidden_thinking_placeholder = False
+    visible_thinking_ids = _visible_thinking_item_ids(state)
+    hidden_thinking_placeholder_added = False
+    truncated_thinking_placeholder_added = False
     for item in state.items:
         if item.role == "thinking" and not state.show_thinking:
-            if not hidden_thinking_placeholder:
+            if not hidden_thinking_placeholder_added:
                 desired.append(
                     (
-                        ChatItem(
-                            role="thinking",
-                            text="Thinking… Press Ctrl+T to show thinking tokens.",
-                        ),
+                        ChatItem(role="thinking", text=HIDDEN_THINKING_PLACEHOLDER),
                         state.show_tool_results,
                     )
                 )
-                hidden_thinking_placeholder = True
+                hidden_thinking_placeholder_added = True
             continue
-        hidden_thinking_placeholder = False
+        if item.role == "thinking" and id(item) not in visible_thinking_ids:
+            if not truncated_thinking_placeholder_added:
+                desired.append(
+                    (
+                        ChatItem(role="thinking", text=TRUNCATED_THINKING_PLACEHOLDER),
+                        state.show_tool_results,
+                    )
+                )
+                truncated_thinking_placeholder_added = True
+            continue
         desired.append((item, state.show_tool_results or item.always_show_tool_result))
     if state.assistant_buffer:
         desired.append((ChatItem(role="assistant", text=state.assistant_buffer), state.show_tool_results))
     return desired
 
 
+def _visible_thinking_item_ids(state: TuiState) -> set[int]:
+    if not state.show_thinking:
+        return set()
+    visible: set[int] = set()
+    total_chars = 0
+    total_items = 0
+    for item in reversed(state.items):
+        if item.role != "thinking":
+            continue
+        next_chars = total_chars + len(item.text)
+        if total_items >= MAX_VISIBLE_THINKING_ITEMS or next_chars > MAX_VISIBLE_THINKING_CHARS:
+            break
+        visible.add(id(item))
+        total_items += 1
+        total_chars = next_chars
+    return visible
+
+
 def _has_hidden_thinking_placeholder(desired: list[tuple[ChatItem, bool]]) -> bool:
     return any(
-        item.role == "thinking" and item.text == "Thinking… Press Ctrl+T to show thinking tokens."
+        item.role == "thinking" and item.text == HIDDEN_THINKING_PLACEHOLDER
         for item, _show_tool_results in desired
     )
 

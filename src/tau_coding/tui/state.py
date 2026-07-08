@@ -293,9 +293,34 @@ def _fallback_tool_call_invocation(tool_call: ToolCall) -> str:
     return tool_call.name
 
 
-def _display_tool_arguments(arguments: dict[str, JSONValue]) -> dict[str, JSONValue]:
-    """Return human-facing tool arguments without parser-internal fallback data."""
-    return {key: value for key, value in arguments.items() if key != "_raw_arguments"}
+def _display_tool_arguments(arguments: dict[str, JSONValue]) -> str:
+    """Return a compact human-facing argument summary for generic tool calls."""
+    parts: list[str] = []
+    for key, value in arguments.items():
+        if key == "_raw_arguments":
+            continue
+        parts.append(f"{key}={_display_tool_argument_value(value)}")
+        if len(parts) >= 3:
+            remaining = len([name for name in arguments if name != "_raw_arguments"]) - len(parts)
+            if remaining > 0:
+                parts.append(f"+{remaining} more")
+            break
+    return " ".join(parts)
+
+
+def _display_tool_argument_value(value: JSONValue) -> str:
+    if isinstance(value, str):
+        collapsed = " ".join(value.split())
+        if len(collapsed) > 48:
+            collapsed = f"{collapsed[:45]}…"
+        return repr(collapsed)
+    if isinstance(value, bool | int | float) or value is None:
+        return repr(value)
+    if isinstance(value, list):
+        return f"[{len(value)} item{'s' if len(value) != 1 else ''}]"
+    if isinstance(value, dict):
+        return f"{{{len(value)} key{'s' if len(value) != 1 else ''}}}"
+    return "…"
 
 
 def _string_argument(arguments: dict[str, JSONValue], key: str) -> str | None:

@@ -1181,6 +1181,41 @@ async def test_transcript_removes_whitespace_only_active_assistant_message() -> 
 
 
 @pytest.mark.anyio
+async def test_hidden_thinking_renders_single_placeholder() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        transcript = app.query_one("#transcript", TranscriptView)
+        for index in range(80):
+            app.state.add_thinking_delta(f"plan {index}\n")
+            app.state.add_item("assistant", f"answer {index}")
+        app._refresh(scroll_end=True)
+        await pilot.pause()
+
+        text = "\n".join(line.text for line in transcript.lines)
+        assert text.count("Thinking… Press Ctrl+T to show thinking tokens.") == 1
+
+
+@pytest.mark.anyio
+async def test_expanded_thinking_is_bounded_for_responsive_toggle() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        transcript = app.query_one("#transcript", TranscriptView)
+        for index in range(80):
+            app.state.add_thinking_delta(f"plan {index}\n")
+            app.state.add_item("assistant", f"answer {index}")
+        app.state.show_thinking = True
+        app._refresh(scroll_end=True)
+        await pilot.pause()
+
+        text = "\n".join(line.text for line in transcript.lines)
+        assert "Earlier thinking hidden to keep the TUI responsive." in text
+        assert "plan 79" in text
+        assert "plan 0" not in text
+
+
+@pytest.mark.anyio
 async def test_streaming_transcript_deltas_do_not_force_scroll_end_during_scrollback() -> None:
     app = TauTuiApp(
         FakeSession(
