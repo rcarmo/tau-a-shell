@@ -78,6 +78,8 @@ class TuiState:
 
     def add_tool_call(self, tool_call: ToolCall) -> None:
         """Append a collapsed tool-call item."""
+        if not tool_call.name.strip():
+            return
         skill_name = self._read_skill_name(tool_call)
         if skill_name is not None:
             self.add_item(
@@ -131,6 +133,8 @@ class TuiState:
 
     def record_tool_result(self, result: AgentToolResult) -> None:
         """Attach a tool result to its matching call, or append an orphan result."""
+        if _is_blank_unknown_tool_result(result):
+            return
         result_text = format_tool_result_block(
             name=result.name,
             ok=result.ok,
@@ -214,6 +218,14 @@ class TuiState:
         return None
 
 
+def _is_blank_unknown_tool_result(result: AgentToolResult) -> bool:
+    return (
+        not result.name.strip()
+        and not result.ok
+        and result.content.strip() == "Unknown tool:"
+    )
+
+
 def _parse_branch_summary_message(content: str) -> str | None:
     prefix = (
         "The following is a summary of a branch that this conversation "
@@ -234,6 +246,8 @@ def _parse_compaction_summary_message(content: str) -> str | None:
 
 def format_tool_call_block(tool_call: ToolCall) -> str:
     """Format a collapsed tool call for live and restored transcript blocks."""
+    if not tool_call.name.strip():
+        return ""
     invocation = format_tool_call_invocation(tool_call)
     if tool_call.name in {"sh", "bash"}:
         return invocation
@@ -287,6 +301,8 @@ def _read_line_suffix(arguments: dict[str, JSONValue]) -> str:
 
 
 def _fallback_tool_call_invocation(tool_call: ToolCall) -> str:
+    if not tool_call.name.strip():
+        return ""
     display_arguments = _display_tool_arguments(tool_call.arguments)
     if display_arguments:
         return f"{tool_call.name} {display_arguments}"
@@ -349,7 +365,8 @@ def _number_argument(arguments: dict[str, JSONValue], key: str) -> int | float |
 def format_tool_result_summary(*, name: str, ok: bool) -> str:
     """Format a terse tool result line for orphaned results."""
     status = "✓" if ok else "✗"
-    return f"{status} {name}"
+    label = name.strip() or "tool"
+    return f"{status} {label}"
 
 
 def format_tool_result_block(
@@ -361,7 +378,8 @@ def format_tool_result_block(
 ) -> str:
     """Format a tool result for live and restored transcript blocks."""
     status = "✓" if ok else "✗"
-    lines = [f"{status} {name}"]
+    label = name.strip() or "tool"
+    lines = [f"{status} {label}"]
     if content.strip():
         lines.append(_preview_text(content, max_lines=TOOL_RESULT_PREVIEW_LINES))
     patch = _result_patch(name=name, ok=ok, data=data)

@@ -268,6 +268,47 @@ def test_tool_result_blocks_skip_whitespace_only_content() -> None:
     assert format_tool_result_block(name="read", ok=True, content="\n  \n") == "✓ read"
 
 
+def test_tui_adapter_ignores_blank_tool_call_and_blank_unknown_tool_result() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+
+    adapter.apply(ToolExecutionStartEvent(tool_call=ToolCall(id="call-blank", name="", arguments={})))
+    adapter.apply(
+        ToolExecutionEndEvent(
+            result=AgentToolResult(
+                tool_call_id="call-blank",
+                name="",
+                ok=False,
+                content="Unknown tool:",
+                error="Unknown tool:",
+            )
+        )
+    )
+
+    assert state.items == []
+
+
+def test_blank_named_non_unknown_tool_result_uses_generic_label() -> None:
+    state = TuiState()
+    adapter = TuiEventAdapter(state)
+
+    adapter.apply(
+        ToolExecutionEndEvent(
+            result=AgentToolResult(
+                tool_call_id="call-blank",
+                name="",
+                ok=False,
+                content="Tool failed before a name was parsed.",
+                error="Tool failed before a name was parsed.",
+            )
+        )
+    )
+
+    assert [(item.role, item.text, item.tool_result_text) for item in state.items] == [
+        ("tool", "✗ tool", "✗ tool\nTool failed before a name was parsed.")
+    ]
+
+
 def test_tui_adapter_ignores_empty_tool_updates() -> None:
     state = TuiState()
     adapter = TuiEventAdapter(state)
