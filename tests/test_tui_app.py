@@ -1931,6 +1931,30 @@ async def test_tui_resize_same_size_is_idempotent(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.anyio
+async def test_tui_refreshes_layout_on_resize_without_sidebar_breakpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(show_sidebar=True))
+    layout_refreshes = 0
+    original_refresh = app.refresh
+
+    def recording_refresh(*args: object, **kwargs: object) -> object:
+        nonlocal layout_refreshes
+        if kwargs.get("layout") is True:
+            layout_refreshes += 1
+        return original_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(app, "refresh", recording_refresh)
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        layout_refreshes = 0
+        await pilot.resize_terminal(width=118, height=30)
+        await pilot.pause()
+
+    assert layout_refreshes > 0
+
+
+@pytest.mark.anyio
 async def test_tui_sidebar_visibility_updates_on_resize() -> None:
     app = TauTuiApp(FakeSession(), tui_settings=TuiSettings(show_sidebar=True))
 

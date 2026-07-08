@@ -1952,12 +1952,29 @@ class TauTuiApp(App[None]):
             self._activity_timer = None
 
     def on_resize(self, event: Resize) -> None:
-        """Update responsive chrome when the terminal changes size."""
+        """Update responsive chrome and transcript layout when the terminal changes size."""
         size = (event.size.width, event.size.height)
         if size == self._last_responsive_size:
             return
         self._last_responsive_size = size
-        self._update_responsive_layout(event.size.width, event.size.height)
+        self._handle_terminal_resize(event.size.width, event.size.height)
+
+    def _handle_terminal_resize(self, width: int, height: int) -> None:
+        """Force Tau's mounted widgets to reconcile after a terminal resize."""
+        self._update_responsive_layout(width, height)
+        try:
+            transcript = self.query_one("#transcript", TranscriptView)
+        except NoMatches:
+            self.refresh(layout=True)
+            return
+        scroll_end = transcript.is_vertical_scroll_end
+        theme = self.tui_settings.resolved_theme
+        self._refresh_chrome(theme=theme)
+        transcript.update_from_state(self.state, theme=theme, scroll_end=scroll_end)
+        self._refresh_completions()
+        transcript.scroll_to(x=0, y=transcript.scroll_offset.y, animate=False, immediate=True)
+        self.refresh(layout=True)
+        self.screen.refresh(layout=True)
 
     def on_click(self, event: events.Click) -> None:
         """Return keyboard focus to the prompt after clicks in the main TUI."""
