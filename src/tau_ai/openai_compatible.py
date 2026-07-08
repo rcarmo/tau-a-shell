@@ -642,7 +642,7 @@ def _build_chat_payload(
         "stream": True,
         "messages": [
             _system_message(system),
-            *[_message_to_openai(message) for message in messages],
+            *_messages_to_openai(messages),
         ],
     }
     if reasoning_effort is not None:
@@ -698,6 +698,7 @@ def _messages_to_responses_input(
     messages: list[AgentMessage],
 ) -> list[JSONValue]:
     items: list[JSONValue] = []
+    invalid_tool_call_ids = _invalid_tool_call_ids(messages)
     for message in messages:
         if isinstance(message, UserMessage):
             items.append({"role": "user", "content": message.content})
@@ -705,15 +706,19 @@ def _messages_to_responses_input(
             if message.content:
                 items.append({"role": "assistant", "content": message.content})
             for tool_call in message.tool_calls:
+                if tool_call.id in invalid_tool_call_ids:
+                    continue
                 items.append(
                     {
                         "type": "function_call",
                         "call_id": _responses_call_id(tool_call.id),
-                        "name": tool_call.name or "tool",
+                        "name": tool_call.name,
                         "arguments": dumps(tool_call.arguments),
                     }
                 )
         elif isinstance(message, ToolResultMessage):
+            if message.tool_call_id in invalid_tool_call_ids:
+                continue
             items.append(
                 {
                     "type": "function_call_output",
@@ -855,25 +860,55 @@ def _system_message(system: str) -> dict[str, JSONValue]:
     return {"role": "system", "content": system}
 
 
-def _message_to_openai(message: AgentMessage) -> dict[str, JSONValue]:
+def _messages_to_openai(messages: list[AgentMessage]) -> list[dict[str, JSONValue]]:
+    invalid_tool_call_ids = _invalid_tool_call_ids(messages)
+    items: list[dict[str, JSONValue]] = []
+    for message in messages:
+        item = _message_to_openai(message, invalid_tool_call_ids=invalid_tool_call_ids)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def _message_to_openai(
+    message: AgentMessage,
+    *,
+    invalid_tool_call_ids: set[str] | None = None,
+) -> dict[str, JSONValue] | None:
+    invalid_tool_call_ids = invalid_tool_call_ids or set()
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.content}
 
     if isinstance(message, AssistantMessage):
+        valid_tool_calls = [
+            tool_call for tool_call in message.tool_calls if tool_call.id not in invalid_tool_call_ids
+        ]
+        if not message.content and not valid_tool_calls:
+            return None
         item: dict[str, JSONValue] = {"role": "assistant", "content": message.content}
-        if message.tool_calls:
-            item["tool_calls"] = [
-                _tool_call_to_openai(tool_call) for tool_call in message.tool_calls
-            ]
+        if valid_tool_calls:
+            item["tool_calls"] = [_tool_call_to_openai(tool_call) for tool_call in valid_tool_calls]
         return item
 
     if isinstance(message, ToolResultMessage):
+        if message.tool_call_id in invalid_tool_call_ids:
+            return None
         return {
             "role": "tool",
             "tool_call_id": message.tool_call_id,
             "name": message.name or "tool",
             "content": message.content,
         }
+
+
+def _invalid_tool_call_ids(messages: list[AgentMessage]) -> set[str]:
+    return {
+        tool_call.id
+        for message in messages
+        if isinstance(message, AssistantMessage)
+        for tool_call in message.tool_calls
+        if not tool_call.name.strip()
+    }
 
 
 def _tool_to_openai(tool: AgentTool) -> dict[str, JSONValue]:

@@ -271,7 +271,9 @@ class AnthropicProvider:
                             continue
 
                         tool_calls = [
-                            builder.build(index) for index, builder in sorted(tool_builders.items())
+                            builder.build(index)
+                            for index, builder in sorted(tool_builders.items())
+                            if builder.has_name
                         ]
                         for tool_call in tool_calls:
                             yield ProviderToolCallEvent(tool_call=tool_call)
@@ -352,6 +354,10 @@ class _AnthropicToolBuilder:
         self.name = ""
         self.arguments_parts: list[str] = []
 
+    @property
+    def has_name(self) -> bool:
+        return bool(self.name.strip())
+
     def build(self, index: int) -> ToolCall:
         arguments_text = "".join(self.arguments_parts)
         arguments = _loads_object(arguments_text) if arguments_text else {}
@@ -381,7 +387,7 @@ def _build_messages_payload(
         "max_tokens": max_tokens,
         "stream": True,
         "system": system,
-        "messages": [_anthropic_message(message) for message in messages],
+        "messages": _anthropic_messages(messages),
     }
     if thinking_type is not None:
         payload["thinking"] = {"type": thinking_type}
@@ -395,7 +401,22 @@ def _build_messages_payload(
     return payload
 
 
-def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
+def _anthropic_messages(messages: list[AgentMessage]) -> list[dict[str, JSONValue]]:
+    invalid_tool_call_ids = _invalid_tool_call_ids(messages)
+    items: list[dict[str, JSONValue]] = []
+    for message in messages:
+        item = _anthropic_message(message, invalid_tool_call_ids=invalid_tool_call_ids)
+        if item is not None:
+            items.append(item)
+    return items
+
+
+def _anthropic_message(
+    message: AgentMessage,
+    *,
+    invalid_tool_call_ids: set[str] | None = None,
+) -> dict[str, JSONValue] | None:
+    invalid_tool_call_ids = invalid_tool_call_ids or set()
     if isinstance(message, UserMessage):
         return {"role": "user", "content": message.content}
     if isinstance(message, AssistantMessage):
@@ -403,6 +424,8 @@ def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
         if message.content:
             content.append({"type": "text", "text": message.content})
         for tool_call in message.tool_calls:
+            if tool_call.id in invalid_tool_call_ids:
+                continue
             content.append(
                 {
                     "type": "tool_use",
@@ -411,8 +434,12 @@ def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
                     "input": tool_call.arguments,
                 }
             )
+        if not content:
+            return None
         return {"role": "assistant", "content": content}
     if isinstance(message, ToolResultMessage):
+        if message.tool_call_id in invalid_tool_call_ids:
+            return None
         return {
             "role": "user",
             "content": [
@@ -425,6 +452,16 @@ def _anthropic_message(message: AgentMessage) -> dict[str, JSONValue]:
             ],
         }
     raise TypeError(f"Unsupported message type: {type(message).__name__}")
+
+
+def _invalid_tool_call_ids(messages: list[AgentMessage]) -> set[str]:
+    return {
+        tool_call.id
+        for message in messages
+        if isinstance(message, AssistantMessage)
+        for tool_call in message.tool_calls
+        if not tool_call.name.strip()
+    }
 
 
 def _anthropic_tool_id(value: str) -> str:

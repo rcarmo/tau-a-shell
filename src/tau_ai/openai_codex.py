@@ -403,6 +403,7 @@ def _build_codex_payload(
 
 def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue]:
     items: list[JSONValue] = []
+    invalid_tool_call_ids = _invalid_tool_call_ids(messages)
     assistant_index = 0
     for message in messages:
         if isinstance(message, UserMessage):
@@ -431,17 +432,21 @@ def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue
                 )
                 assistant_index += 1
             for tool_call in message.tool_calls:
+                if tool_call.id in invalid_tool_call_ids:
+                    continue
                 call_id, item_id = _split_tool_call_id(tool_call.id)
                 item: dict[str, JSONValue] = {
                     "type": "function_call",
                     "call_id": _codex_call_id(call_id),
-                    "name": tool_call.name or "tool",
+                    "name": tool_call.name,
                     "arguments": dumps(tool_call.arguments),
                 }
                 if item_id:
                     item["id"] = _codex_item_id(item_id)
                 items.append(item)
         elif isinstance(message, ToolResultMessage):
+            if message.tool_call_id in invalid_tool_call_ids:
+                continue
             call_id, _item_id = _split_tool_call_id(message.tool_call_id)
             call_id = _codex_call_id(call_id)
             items.append(
@@ -452,6 +457,16 @@ def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue
                 }
             )
     return items
+
+
+def _invalid_tool_call_ids(messages: list[AgentMessage]) -> set[str]:
+    return {
+        tool_call.id
+        for message in messages
+        if isinstance(message, AssistantMessage)
+        for tool_call in message.tool_calls
+        if not tool_call.name.strip()
+    }
 
 
 def _codex_identifier(value: str, *, fallback: str) -> str:

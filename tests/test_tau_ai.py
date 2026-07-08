@@ -1063,6 +1063,45 @@ async def test_anthropic_provider_streams_thinking_deltas() -> None:
 
 
 @pytest.mark.anyio
+async def test_anthropic_provider_ignores_orphan_input_json_delta() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"message_start","message":{"content":[]}}\n\n'
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}\n\n'
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"input_json_delta","partial_json":"\\"README.md\\"}"}}\n\n'
+                'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}\n\n'
+                'data: {"type":"message_stop"}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = AnthropicProvider(
+            AnthropicConfig(api_key="test-key", base_url="https://api.anthropic.test/v1"),
+            client=client,
+        )
+
+        events = await _collect(
+            provider.stream_response(
+                model="claude-test",
+                system="You are Tau.",
+                messages=[UserMessage(content="read")],
+                tools=[_weather_tool()],
+            )
+        )
+
+    assert not [event for event in events if isinstance(event, ProviderToolCallEvent)]
+    end = events[-1]
+    assert isinstance(end, ProviderResponseEndEvent)
+    assert end.message.tool_calls == []
+    assert end.finish_reason == "tool_use"
+
+
+@pytest.mark.anyio
 async def test_anthropic_provider_retries_transient_status_with_event() -> None:
     requests: list[httpx.Request] = []
 
@@ -2036,7 +2075,7 @@ async def test_anthropic_provider_can_use_bearer_auth_for_copilot() -> None:
     assert "x-api-key" not in request.headers
 
 
-def test_codex_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> None:
+def test_codex_responses_input_sanitizes_foreign_tool_ids_and_drops_empty_names() -> None:
     from tau_ai.openai_codex import _messages_to_responses_input
 
     foreign_id = "call_" + ("x" * 90) + "|fc.bad/id:with:separators"
@@ -2050,24 +2089,10 @@ def test_codex_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> N
         ]
     )
 
-    assert items[0]["type"] == "function_call"
-    assert items[0]["name"] == "tool"
-    assert isinstance(items[0]["call_id"], str)
-    assert len(items[0]["call_id"]) <= 64
-    assert "|" not in items[0]["call_id"]
-    assert isinstance(items[0]["id"], str)
-    assert len(items[0]["id"]) <= 64
-    assert "." not in items[0]["id"]
-    assert "/" not in items[0]["id"]
-    assert ":" not in items[0]["id"]
-    assert items[1] == {
-        "type": "function_call_output",
-        "call_id": items[0]["call_id"],
-        "output": "ok",
-    }
+    assert items == []
 
 
-def test_openai_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> None:
+def test_openai_responses_input_sanitizes_foreign_tool_ids_and_drops_empty_names() -> None:
     from tau_ai.openai_compatible import _messages_to_responses_input
 
     foreign_id = "call_" + ("x" * 90) + "|fc.bad/id:with:separators"
@@ -2081,12 +2106,7 @@ def test_openai_responses_input_sanitizes_foreign_tool_ids_and_empty_names() -> 
         ]
     )
 
-    assert items[0]["type"] == "function_call"
-    assert items[0]["name"] == "tool"
-    assert isinstance(items[0]["call_id"], str)
-    assert len(items[0]["call_id"]) <= 64
-    assert "|" not in items[0]["call_id"]
-    assert items[1]["call_id"] == items[0]["call_id"]
+    assert items == []
 
 
 def test_anthropic_messages_payload_sanitizes_foreign_tool_ids() -> None:
@@ -2119,7 +2139,7 @@ def test_anthropic_messages_payload_sanitizes_foreign_tool_ids() -> None:
 
 
 @pytest.mark.anyio
-async def test_openai_chat_completions_replays_empty_tool_names_as_tool() -> None:
+async def test_openai_chat_completions_drops_empty_tool_name_pairs() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2151,7 +2171,5 @@ async def test_openai_chat_completions_replays_empty_tool_names_as_tool() -> Non
         )
 
     payload = loads(requests[0].content)
-    assistant = next(message for message in payload["messages"] if message["role"] == "assistant")
-    tool = next(message for message in payload["messages"] if message["role"] == "tool")
-    assert assistant["tool_calls"][0]["function"]["name"] == "tool"
-    assert tool["name"] == "tool"
+    assert not [message for message in payload["messages"] if message["role"] == "assistant"]
+    assert not [message for message in payload["messages"] if message["role"] == "tool"]
