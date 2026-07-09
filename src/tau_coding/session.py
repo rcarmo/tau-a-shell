@@ -108,6 +108,7 @@ from tau_coding.tools import create_bash_tool, create_coding_tools
 
 StreamingBehavior = Literal["steer", "follow_up"]
 _UNSET_LEAF_ID: Final[object] = object()
+TREE_RUNNING_MESSAGE = "Tau is still working. Press Escape to interrupt before using /tree."
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +423,8 @@ class CodingSession:
         replace_instructions: bool = False,
     ) -> SessionTreeBranchResult:
         """Move the active leaf to a previous entry, preserving existing history."""
+        if self._harness.is_running:
+            raise RuntimeError(TREE_RUNNING_MESSAGE)
         entries = await self._read_session_entries()
         by_id = {entry.id: entry for entry in entries}
         if entry_id not in by_id:
