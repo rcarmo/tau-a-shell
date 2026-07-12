@@ -104,6 +104,7 @@ def _source_files() -> list[Path]:
         "AGENTS.md",
         "CONTRIBUTING.md",
         "LICENSE",
+        "Makefile",
         "README.md",
         "build_backend.py",
         "pyproject.toml",
