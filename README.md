@@ -95,7 +95,7 @@ Use `--no-sandbox` when unrestricted execution is intentional:
 tau --no-sandbox
 ```
 
-This behaviour is macOS-only. a-Shell and other platforms do not attempt to invoke `sandbox-exec`.
+This behaviour is macOS-only. a-Shell and other platforms do not attempt to invoke `sandbox-exec`. See [macOS sandboxing](docs/sandboxing.md) for the generated policy, startup flow, failure semantics and security boundary.
 
 ## Configure a provider
 
