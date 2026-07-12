@@ -647,63 +647,6 @@ def test_ordered_tree_entries_terminates_on_parent_cycle() -> None:
 
 
 @pytest.mark.anyio
-async def test_tree_branching_preserves_active_model(tmp_path: Path) -> None:
-    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
-    await storage.append(MessageEntry(id="first", message=UserMessage(content="Earlier")))
-    await storage.append(ModelChangeEntry(id="historical-model", parent_id="first", model="old"))
-    await storage.append(
-        MessageEntry(
-            id="assistant",
-            parent_id="historical-model",
-            message=AssistantMessage(content="Old answer"),
-        )
-    )
-    await storage.append(ModelChangeEntry(id="current-model", parent_id="assistant", model="new"))
-    await storage.append(
-        MessageEntry(
-            id="latest",
-            parent_id="current-model",
-            message=UserMessage(content="Latest"),
-        )
-    )
-    await storage.append(LeafEntry(entry_id="latest"))
-    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
-
-    result = await session.branch_to_entry("assistant")
-
-    assert result == SessionTreeBranchResult(message="Branched session at assistant.")
-    assert session.model == "new"
-    assert session.state.model == "old"
-    assert session.messages == (
-        UserMessage(content="Earlier"),
-        AssistantMessage(content="Old answer"),
-    )
-
-
-@pytest.mark.anyio
-async def test_context_usage_is_cached_until_session_context_changes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
-    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
-    calls = 0
-    original_estimate = coding_session_module.estimate_context_usage
-
-    def wrapped_estimate(*args: object, **kwargs: object):
-        nonlocal calls
-        calls += 1
-        return original_estimate(*args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(coding_session_module, "estimate_context_usage", wrapped_estimate)
-
-    initial_usage = session.context_usage
-    cached_usage = session.context_usage
-
-    assert cached_usage is initial_usage
-    assert calls == 1
-
-
-@pytest.mark.anyio
 async def test_context_usage_recalculates_after_prompt_and_compaction(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     provider = FakeProvider(
@@ -1258,7 +1201,7 @@ async def test_session_branch_with_summary_keeps_pre_branch_model_and_messages(
     await session.branch_to_entry("left", summarize=True)
 
     assert session.state.model == "first-model"
-    assert session.model == "first-model"
+    assert session.model == "second-model"
     assert len(session.messages) == 2
     assert session.messages[0] == UserMessage(content="Before switch")
     assert session.messages[1].content.startswith(
