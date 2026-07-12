@@ -1,5 +1,7 @@
 # Tau Prime
 
+![Tau Prime icon](docs/icon_256.png)
+
 Tau Prime is a derivative of [Tau](https://github.com/alejandro-ao/tau) maintained for running a terminal coding agent on iOS through [a-Shell](https://holzschu.github.io/a-Shell_iOS/) and with native sandboxing on macOS. The command remains `tau`.
 
 The project keeps Tau's original Python agent architecture, but changes the parts that do not translate cleanly to a constrained mobile shell: terminal behaviour, command execution, provider support, installation and packaging. It also runs on ordinary Python 3.13 environments, which is useful for development and for testing changes before moving them to an iPhone or iPad.
