@@ -31,7 +31,6 @@ from tau_ai.events import (
     ProviderToolCallEvent,
 )
 from tau_ai.http import create_async_client
-from tau_ai.http_errors import provider_http_error_message
 from tau_ai.observability import (
     LLMObserver,
     observe_llm_error,

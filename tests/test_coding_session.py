@@ -2625,8 +2625,9 @@ async def test_session_set_model_choice_switches_provider_model_directly(
         credential_store: FileCredentialStore | None = None,
         model: str | None = None,
         thinking_level: str | None = None,
+        llm_observer: object | None = None,
     ) -> SwitchableFakeProvider:
-        del credential_store, thinking_level
+        del credential_store, thinking_level, llm_observer
         created.append((provider_config.name, model))  # type: ignore[attr-defined]
         return SwitchableFakeProvider(provider_config)
 
