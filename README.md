@@ -35,21 +35,24 @@ The repository contains upstream documentation and development notes, but this R
 * Python 3.13
 * a-Shell on iOS or iPadOS for the mobile target
 * Network access to at least one model provider
-* Git, if installing from a checkout
+* `curl` for downloading the a-Shell release tarball
+* Git, if working from a development checkout
 
 A desktop Python 3.13 environment is recommended for development and package testing.
 
 ## Install on a-Shell
 
-Clone the fork and install it into a-Shell's user Python environment:
+Install the source tarball attached to the latest Tau Prime release. Do not clone the repository on a-Shell:
 
 ```sh
-git clone https://github.com/rcarmo/tau-prime.git
-cd tau-prime
-python3.13 -m pip install --user -r requirements.txt
-python3.13 -m pip install --user .
+curl -fL https://github.com/rcarmo/tau-prime/releases/latest/download/tau-prime.tar.gz \
+  -o tau-prime.tar.gz
+python3.13 -m pip install --user ./tau-prime.tar.gz
 tau --version
+rm tau-prime.tar.gz
 ```
+
+The stable `tau-prime.tar.gz` asset always belongs to the latest release. Each release also includes a versioned copy and `SHA256SUMS`. To upgrade, download the current tarball and repeat the install command with `--upgrade`.
 
 Run `tau` from the directory the agent should work on:
 
