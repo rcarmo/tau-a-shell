@@ -28,6 +28,7 @@ class OpenAICompatibleConfig:
     max_retry_delay_seconds: float = DEFAULT_OPENAI_COMPATIBLE_MAX_RETRY_DELAY_SECONDS
     reasoning_effort: str | None = None
     reasoning_effort_parameter: str = "reasoning_effort"
+    force_chat_completions: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -41,7 +41,8 @@ async def list_openai_compatible_models(
     context-window field is extracted when present.
     """
     headers: dict[str, str] = {**(dict(config.headers or {}))}
-    headers.setdefault("Authorization", f"Bearer {config.api_key}")
+    if config.api_key:
+        headers.setdefault("Authorization", f"Bearer {config.api_key}")
     params: dict[str, str] = {}
     if verbose:
         params["verbose"] = "true"

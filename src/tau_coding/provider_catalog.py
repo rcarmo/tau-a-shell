@@ -38,7 +38,7 @@ class ProviderCatalogEntry:
     kind: ProviderKind
     base_url: str
     api_key_env: str
-    credential_name: str
+    credential_name: str | None
     models: tuple[str, ...]
     default_model: str
     docs_url: str
@@ -49,6 +49,7 @@ class ProviderCatalogEntry:
     thinking_parameter: ThinkingParameter | None = None
     model_overrides: dict[str, ProviderModelOverride] | None = None
     dynamic_models: bool = False
+    timeout_seconds: float = 60.0
 
 
 BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
@@ -237,6 +238,19 @@ BUILTIN_PROVIDER_CATALOG: tuple[ProviderCatalogEntry, ...] = (
         thinking_default="medium",
         thinking_parameter="reasoning_effort",
         dynamic_models=True,
+    ),
+    ProviderCatalogEntry(
+        name="lmstudio",
+        display_name="LM Studio",
+        kind="openai-compatible",
+        base_url="http://localhost:1234/v1",
+        api_key_env="LM_STUDIO_API_KEY",
+        credential_name=None,
+        models=(),
+        default_model="",
+        docs_url="https://lmstudio.ai/docs/developer/openai-compat",
+        dynamic_models=True,
+        timeout_seconds=3.0,
     ),
     ProviderCatalogEntry(
         name="openrouter",

@@ -760,7 +760,7 @@ def _format_reload_summary(summary: CodingReloadSummary) -> str:
         "Diagnostics:",
         f"- Resource diagnostics: {_format_reload_category(summary.diagnostics)}",
         "Provider config:",
-        "- Not refreshed by /reload; use /login or /model for provider/model settings.",
+        "- TUI /reload refreshes models for the active dynamic provider.",
     ]
     return "\n".join(lines)
 

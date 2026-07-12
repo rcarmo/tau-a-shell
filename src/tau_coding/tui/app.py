@@ -2106,6 +2106,14 @@ class TauTuiApp(App[None]):
             )
             return
 
+        if text.strip().casefold() == "/reload":
+            provider_settings = load_provider_settings()
+            await ensure_dynamic_provider_models(
+                provider_settings,
+                provider_name=self.session.provider_name,
+            )
+            self.session.reload_provider_settings()
+
         command = self.session.handle_command(text)
         if command.handled:
             if command.clear_requested:
@@ -2832,6 +2840,9 @@ class TauTuiApp(App[None]):
         if entry is None:
             self._notify(f"Unknown provider: {provider_name}", severity="error")
             return
+        if entry.name == "lmstudio":
+            self.run_worker(self._configure_lmstudio(), exclusive=True)
+            return
         if entry.kind == "openai-codex" or entry.name == "github-copilot":
             self.push_screen(
                 OAuthLoginScreen(entry, theme=self.tui_settings.resolved_theme),
@@ -2842,6 +2853,27 @@ class TauTuiApp(App[None]):
             LoginScreen(entry, theme=self.tui_settings.resolved_theme),
             callback=lambda api_key: self._handle_login_result(entry, api_key),
         )
+
+    async def _configure_lmstudio(self) -> None:
+        """Discover LM Studio models without prompting for credentials."""
+        settings = load_provider_settings()
+        updated = await ensure_dynamic_provider_models(
+            settings,
+            provider_name="lmstudio",
+        )
+        self.session.reload_provider_settings()
+        provider = updated.get_provider("lmstudio")
+        if not provider.models:
+            self._notify(
+                "LM Studio is offline or has no loaded models. Start LM Studio, load a model, then use /reload.",
+                severity="warning",
+            )
+            return
+        try:
+            self.session.set_provider("lmstudio", persist_default=False)
+        except TypeError:
+            self.session.set_provider("lmstudio")
+        self._notify(f"LM Studio ready: {len(provider.models)} model(s) discovered.")
 
     def _handle_login_result(self, entry: ProviderCatalogEntry, api_key: str | None) -> None:
         if api_key is None:
@@ -3986,15 +4018,18 @@ async def run_tui_app(
         raise RuntimeError("--resume and --new-session cannot be used together")
 
     provider_settings = load_provider_settings()
-    for provider in provider_settings.providers:
-        provider_settings = await ensure_dynamic_provider_models(
-            provider_settings, provider_name=provider.name
-        )
     shell_settings = load_shell_settings()
     manager = session_manager or SessionManager()
     record = _explicit_resume_record(
         manager,
         session_id=session_id,
+    )
+    target_provider = provider_name or (
+        record.provider_name if record is not None else provider_settings.default_provider
+    )
+    provider_settings = await ensure_dynamic_provider_models(
+        provider_settings,
+        provider_name=target_provider,
     )
     selection = _resolve_tui_startup_selection(
         provider_settings,

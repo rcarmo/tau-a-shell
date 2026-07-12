@@ -1568,7 +1568,7 @@ async def test_session_reload_refreshes_resources_and_system_prompt(tmp_path: Pa
     assert "Skills: 1 total (changed, +1)" in result.message
     assert "Project context files: 1 total (changed, +1)" in result.message
     assert "Next-turn system prompt: rebuilt" in result.message
-    assert "Not refreshed by /reload" in result.message
+    assert "TUI /reload refreshes models for the active dynamic provider" in result.message
     assert entries_after == entries_before
     assert [skill.name for skill in session.skills] == ["testing"]
     assert [Path(context_file.path).name for context_file in session.context_files] == ["AGENTS.md"]
@@ -1606,7 +1606,7 @@ async def test_session_reload_skips_provider_settings_refresh(
 
     assert result.message is not None
     assert "Provider config:" in result.message
-    assert "Not refreshed by /reload" in result.message
+    assert "TUI /reload refreshes models for the active dynamic provider" in result.message
 
 
 @pytest.mark.anyio

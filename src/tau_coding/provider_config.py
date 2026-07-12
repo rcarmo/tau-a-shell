@@ -320,6 +320,7 @@ def provider_config_from_catalog_entry(name: str) -> ProviderConfig:
                 models=entry.models,
                 default_model=entry.default_model,
                 context_windows=context_windows,
+                timeout_seconds=entry.timeout_seconds,
                 thinking_levels=entry.thinking_levels,
                 thinking_models=entry.thinking_models,
                 thinking_default=entry.thinking_default,
@@ -334,6 +335,7 @@ def provider_config_from_catalog_entry(name: str) -> ProviderConfig:
                 models=entry.models,
                 default_model=entry.default_model,
                 context_windows=context_windows,
+                timeout_seconds=entry.timeout_seconds,
                 thinking_levels=entry.thinking_levels,
                 thinking_models=entry.thinking_models,
                 thinking_default=entry.thinking_default,
@@ -347,6 +349,7 @@ def provider_config_from_catalog_entry(name: str) -> ProviderConfig:
             models=entry.models,
             default_model=entry.default_model,
             context_windows=context_windows,
+            timeout_seconds=entry.timeout_seconds,
             thinking_levels=entry.thinking_levels,
             thinking_models=entry.thinking_models,
             thinking_default=entry.thinking_default,
@@ -604,6 +607,10 @@ def _merge_provider_config(existing: ProviderConfig, incoming: ProviderConfig) -
     )
     return replace(
         incoming,
+        base_url=existing.base_url if incoming.name == "lmstudio" else incoming.base_url,
+        timeout_seconds=(
+            existing.timeout_seconds if incoming.name == "lmstudio" else incoming.timeout_seconds
+        ),
         models=models,
         default_model=default_model,
         headers=headers,
@@ -822,6 +829,7 @@ def openai_compatible_config_from_provider(
         max_retry_delay_seconds=provider.max_retry_delay_seconds,
         reasoning_effort=reasoning_effort,
         reasoning_effort_parameter=provider.thinking_parameter or "reasoning_effort",
+        force_chat_completions=provider.name == "lmstudio",
     )
 
 
@@ -984,6 +992,8 @@ def provider_has_usable_credentials(
     credential_reader: CredentialReader | None = None,
 ) -> bool:
     """Return whether Tau can attempt calls for this provider without prompting setup."""
+    if provider.name == "lmstudio":
+        return True
     if provider.credential_name and credential_reader is not None:
         if isinstance(provider, OpenAICodexProviderConfig) or provider.name == "github-copilot":
             get_oauth = getattr(credential_reader, "get_oauth", None)
@@ -1208,6 +1218,8 @@ def _api_key_from_provider(
     *,
     credential_reader: CredentialReader | None,
 ) -> str:
+    if provider.name == "lmstudio":
+        return ""
     if provider.credential_name and credential_reader is not None:
         credential = credential_reader.get(provider.credential_name)
         if credential:

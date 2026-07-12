@@ -389,7 +389,7 @@ def test_reload_command_refreshes_session_resources(tmp_path: Path) -> None:
     assert "Project context files: 1 total (changed, +1)" in result.message
     assert "Next-turn system prompt: rebuilt" in result.message
     assert "Provider config:" in result.message
-    assert "Not refreshed by /reload" in result.message
+    assert "TUI /reload refreshes models for the active dynamic provider" in result.message
     assert session.reload_called is True
     assert session.provider_reload_called is False
 

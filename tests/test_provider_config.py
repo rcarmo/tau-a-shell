@@ -18,6 +18,7 @@ from tau_coding.provider_config import (
     ensure_dynamic_provider_models,
     load_provider_settings,
     openai_compatible_config_from_provider,
+    provider_config_from_catalog_entry,
     provider_default_thinking_level,
     provider_has_usable_credentials,
     provider_settings_from_json,
@@ -38,6 +39,7 @@ def test_load_provider_settings_missing_file_uses_openai_default(tmp_path: Path)
         "openai-codex",
         "anthropic",
         "github-copilot",
+        "lmstudio",
         "openrouter",
         "huggingface",
         "deepseek",
@@ -46,6 +48,11 @@ def test_load_provider_settings_missing_file_uses_openai_default(tmp_path: Path)
     ]
     assert settings.providers[0].default_model == DEFAULT_MODEL
     assert settings.get_provider("anthropic").api_key_env == "ANTHROPIC_API_KEY"
+    lmstudio = settings.get_provider("lmstudio")
+    assert lmstudio.base_url == "http://localhost:1234/v1"
+    assert lmstudio.timeout_seconds == 3.0
+    assert lmstudio.dynamic_models is True
+    assert lmstudio.credential_name is None
     assert settings.get_provider("openrouter").api_key_env == "OPENROUTER_API_KEY"
     assert settings.get_provider("huggingface").api_key_env == "HF_TOKEN"
 
@@ -207,7 +214,10 @@ def test_save_and_load_provider_settings_round_trip(
     loaded = load_provider_settings(paths)
 
     assert path == tmp_path / ".tau" / "providers.json"
-    assert loaded == settings
+    assert loaded.default_provider == settings.default_provider
+    assert loaded.get_provider("local") == settings.get_provider("local")
+    assert loaded.scoped_models == settings.scoped_models
+    assert loaded.get_provider("lmstudio").base_url == "http://localhost:1234/v1"
 
 
 def test_provider_settings_parses_scoped_models() -> None:
@@ -271,6 +281,7 @@ def test_upsert_openai_compatible_provider_replaces_and_sets_default() -> None:
         "deepseek",
         "github-copilot",
         "huggingface",
+        "lmstudio",
         "local",
         "nebius",
         "openai",
@@ -367,6 +378,18 @@ def test_openai_compatible_config_from_provider_uses_configured_timeout(
     assert config.timeout_seconds == 180
     assert config.max_retries == 3
     assert config.max_retry_delay_seconds == 0.25
+
+
+def test_lmstudio_config_requires_no_key_and_forces_chat_completions() -> None:
+    provider = provider_config_from_catalog_entry("lmstudio")
+
+    config = openai_compatible_config_from_provider(provider)
+
+    assert config.api_key == ""
+    assert config.base_url == "http://localhost:1234/v1"
+    assert config.timeout_seconds == 3.0
+    assert config.force_chat_completions is True
+    assert provider_has_usable_credentials(provider)
 
 
 def test_openai_compatible_config_from_provider_uses_configured_headers(
@@ -778,6 +801,7 @@ def test_load_provider_settings_restores_builtin_providers_with_stored_credentia
     assert [provider.name for provider in settings.providers] == [
         "local",
         "openai-codex",
+        "lmstudio",
         "openrouter",
     ]
     assert settings.default_provider == "local"
@@ -999,6 +1023,43 @@ async def test_ensure_dynamic_provider_models_uses_copilot_proxy_and_headers(
     assert copilot.models == ("gpt-5.5", "claude-sonnet-5", "gemini-3.5-flash")
     assert copilot.default_model == "gpt-5.5"
     assert copilot.context_windows["claude-sonnet-5"] == 1000000
+
+
+@pytest.mark.anyio
+async def test_ensure_dynamic_provider_models_discovers_lmstudio_without_credentials(
+    tmp_path: Path,
+) -> None:
+    paths = TauPaths(home=tmp_path / ".tau")
+    provider = OpenAICompatibleProviderConfig(
+        name="lmstudio",
+        base_url="http://192.168.1.50:1234/v1",
+        api_key_env="LM_STUDIO_API_KEY",
+        models=(),
+        default_model="",
+        timeout_seconds=3.0,
+        dynamic_models=True,
+    )
+    settings = ProviderSettings(default_provider="lmstudio", providers=(provider,))
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"id": "local-model"}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        updated = await ensure_dynamic_provider_models(
+            settings,
+            provider_name="lmstudio",
+            paths=paths,
+            client=client,
+        )
+
+    discovered = updated.get_provider("lmstudio")
+    assert requests[0].url == "http://192.168.1.50:1234/v1/models?verbose=true"
+    assert "authorization" not in requests[0].headers
+    assert discovered.models == ("local-model",)
+    assert discovered.default_model == "local-model"
+    assert load_provider_settings(paths).get_provider("lmstudio").base_url == provider.base_url
 
 
 @pytest.mark.anyio

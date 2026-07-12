@@ -91,7 +91,7 @@ class OpenAICompatibleProvider:
         signal: CancellationToken | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         """Stream one model response as provider-neutral events."""
-        if _use_responses_api(model):
+        if not self._config.force_chat_completions and _use_responses_api(model):
             return self._stream_responses(
                 model=model,
                 system=system,
@@ -177,10 +177,9 @@ class OpenAICompatibleProvider:
 
         async def iterator() -> AsyncIterator[ProviderEvent]:
             client = self._get_client()
-            headers = {
-                **(dict(self._config.headers or {})),
-                "Authorization": f"Bearer {self._config.api_key}",
-            }
+            headers = {**(dict(self._config.headers or {}))}
+            if self._config.api_key:
+                headers["Authorization"] = f"Bearer {self._config.api_key}"
 
             attempt = 0
             while True:
