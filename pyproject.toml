@@ -5,7 +5,7 @@ backend-path = ["."]
 
 [project]
 name = "tau-prime"
-version = "42.0.2"
+version = "42.0.3"
 description = "A Tau derivative for a-Shell and sandboxed macOS use."
 readme = "README.md"
 license = "MIT"
