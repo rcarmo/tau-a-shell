@@ -107,6 +107,19 @@ async def test_jsonl_storage_missing_file_is_empty(tmp_path: Path) -> None:
     assert await storage.read_all() == []
 
 
+@pytest.mark.anyio
+async def test_jsonl_storage_round_trips_unicode_line_separators(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    entry = MessageEntry(
+        id="unicode",
+        message=UserMessage(content="first\u2028second\u2029third\u0085fourth"),
+    )
+
+    await storage.append(entry)
+
+    assert await storage.read_all() == [entry]
+
+
 def test_session_state_replays_linear_entries() -> None:
     entries = [
         MessageEntry(id="user", message=UserMessage(content="Hi")),

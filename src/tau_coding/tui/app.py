@@ -1719,12 +1719,12 @@ class TauTuiApp(App[None]):
         border: tall $tau-border;
     }
 
-    ListView > ListItem.--highlight {
+    ListView > ListItem.-highlight {
         background: $tau-highlight-background;
         color: $tau-highlight-text;
     }
 
-    ListView > ListItem.--highlight Label {
+    ListView > ListItem.-highlight Label {
         background: $tau-highlight-background;
         color: $tau-highlight-text;
     }
@@ -3327,7 +3327,10 @@ class TauTuiApp(App[None]):
         enough_space = width >= SIDEBAR_MIN_WIDTH and height >= SIDEBAR_MIN_HEIGHT
         show_sidebar = self.tui_settings.show_sidebar and enough_space
         hide_sidebar = not show_sidebar
-        if hide_sidebar == self._last_hide_sidebar and self.has_class("-hide-sidebar") == hide_sidebar:
+        if (
+            hide_sidebar == self._last_hide_sidebar
+            and self.has_class("-hide-sidebar") == hide_sidebar
+        ):
             return
         self._last_hide_sidebar = hide_sidebar
         self.set_class(hide_sidebar, "-hide-sidebar")

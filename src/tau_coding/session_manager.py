@@ -8,7 +8,6 @@ from time import time
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
-
 from tau_coding.paths import TauPaths
 
 
@@ -212,7 +211,7 @@ class SessionManager:
             return []
 
         records: list[CodingSessionRecord] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8").split("\n"):
             stripped = line.strip()
             if not stripped:
                 continue

@@ -1582,6 +1582,28 @@ async def test_transcript_state_refresh_reuses_unchanged_widgets() -> None:
 
 
 @pytest.mark.anyio
+async def test_transcript_state_refresh_mounts_bounded_recent_window() -> None:
+    app = TauTuiApp(FakeSession(messages=[]))
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        transcript = app.query_one("#transcript", TranscriptView)
+        for index in range(260):
+            app.state.add_item("user", f"message {index}")
+        transcript.update_from_state(app.state, theme=app.tui_settings.resolved_theme)
+        await pilot.pause()
+
+        widgets = [
+            child for child in transcript.children if isinstance(child, TranscriptMessageWidget)
+        ]
+        assert len(widgets) == 201
+        assert widgets[0].item.role == "status"
+        assert "60" in widgets[0].item.text
+        assert widgets[1].item.text == "message 60"
+        assert widgets[-1].item.text == "message 259"
+        assert len(app.state.items) == 260
+
+
+@pytest.mark.anyio
 async def test_tui_streaming_deltas_update_active_message_without_full_refresh() -> None:
     session = FakeSession(
         events=[
@@ -1924,8 +1946,13 @@ async def test_tui_resize_same_size_is_idempotent(monkeypatch: pytest.MonkeyPatc
     async with app.run_test(size=(120, 30)):
         calls.clear()
         app._last_responsive_size = None
-        app.on_resize(type("ResizeEvent", (), {"size": type("Size", (), {"width": 120, "height": 30})()})())
-        app.on_resize(type("ResizeEvent", (), {"size": type("Size", (), {"width": 120, "height": 30})()})())
+        resize_event = type(
+            "ResizeEvent",
+            (),
+            {"size": type("Size", (), {"width": 120, "height": 30})()},
+        )
+        app.on_resize(resize_event())
+        app.on_resize(resize_event())
 
     assert len(calls) <= 1
 

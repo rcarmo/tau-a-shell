@@ -16,7 +16,7 @@ dependencies = [
     "httpx[socks]>=0.27",
     "packaging>=24.0",
     "rich>=13.0",
-    "textual>=1.0",
+    "textual>=8.2.8",
     "typer>=0.12",
 ]
 

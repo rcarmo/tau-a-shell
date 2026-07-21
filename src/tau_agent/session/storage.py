@@ -44,4 +44,4 @@ class JsonlSessionStorage:
     def _read_all_sync(self) -> list[SessionEntry]:
         if not self.path.exists():
             return []
-        return entries_from_json_lines(self.path.read_text(encoding="utf-8").splitlines())
+        return entries_from_json_lines(self.path.read_text(encoding="utf-8").split("\n"))

@@ -18,8 +18,6 @@ from tau_ai import (
     AnthropicConfig,
     AnthropicProvider,
     FakeProvider,
-    redact_json_value,
-    redact_headers,
     LLMObservation,
     ModelInfo,
     OpenAICodexConfig,
@@ -36,6 +34,8 @@ from tau_ai import (
     ProviderToolCallEvent,
     list_openai_compatible_models,
     openai_compatible_config_from_env,
+    redact_headers,
+    redact_json_value,
 )
 
 
@@ -1102,13 +1102,16 @@ async def test_anthropic_provider_ignores_orphan_input_json_delta() -> None:
 
 
 @pytest.mark.anyio
-async def test_anthropic_provider_retries_transient_status_with_event() -> None:
+@pytest.mark.parametrize("status_code", [503, 529])
+async def test_anthropic_provider_retries_transient_status_with_event(
+    status_code: int,
+) -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if len(requests) == 1:
-            return httpx.Response(503, text="overloaded")
+            return httpx.Response(status_code, text="overloaded")
         return httpx.Response(
             200,
             text=(
@@ -1142,7 +1145,7 @@ async def test_anthropic_provider_retries_transient_status_with_event() -> None:
 
     assert len(requests) == 2
     assert isinstance(events[0], ProviderRetryEvent)
-    assert events[0].data == {"status_code": 503, "body": "overloaded"}
+    assert events[0].data == {"status_code": status_code, "body": "overloaded"}
     assert [event.type for event in events] == [
         "retry",
         "response_start",

@@ -1920,7 +1920,11 @@ def _tree_entry_title(entry: SessionEntry) -> str:
     match entry.type:
         case "message":
             message = entry.message
-            if isinstance(message, AssistantMessage) and message.tool_calls and not message.content:
+            if (
+                isinstance(message, AssistantMessage)
+                and message.tool_calls
+                and not message.content.strip()
+            ):
                 tool_names = ", ".join(call.name for call in message.tool_calls)
                 return f"tool call: {tool_names}"
             return f"{message.role}: {_message_text_preview(message)}"
@@ -2027,7 +2031,9 @@ def _infer_provider_for_model(
     """
     if provider_settings is None or not model:
         return None
-    matches = tuple(provider for provider in provider_settings.providers if model in provider.models)
+    matches = tuple(
+        provider for provider in provider_settings.providers if model in provider.models
+    )
     if not matches:
         return None
     for provider in matches:

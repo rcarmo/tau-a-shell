@@ -179,10 +179,24 @@ async def test_load_empty_session_defers_transcript_file(tmp_path: Path) -> None
     assert session.messages == ()
     assert session.state.model == "fake"
     assert session.thinking_level == "medium"
-    assert session.available_thinking_levels == ("off", "minimal", "low", "medium", "high", "xhigh")
+    assert session.available_thinking_levels == (
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    )
     assert session.cwd == tmp_path
     assert session.model == "fake"
-    assert [tool.name for tool in session.tools] == ["read", "write", "edit", "python", "sh", "pytest"]
+    assert [tool.name for tool in session.tools] == [
+        "read",
+        "write",
+        "edit",
+        "python",
+        "sh",
+        "pytest",
+    ]
 
 
 @pytest.mark.anyio
@@ -251,7 +265,14 @@ async def test_prompt_logs_error_event_diagnostic_data(tmp_path: Path) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     tau_paths = TauPaths(home=tmp_path / "tau-home", agents_home=tmp_path / "agents-home")
     provider = FakeProvider(
-        [[ProviderErrorEvent(message="provider failed", data={"status_code": 400, "body": "bad request"})]]
+        [
+            [
+                ProviderErrorEvent(
+                    message="provider failed",
+                    data={"status_code": 400, "body": "bad request"},
+                )
+            ]
+        ]
     )
     session = await CodingSession.load(
         CodingSessionConfig(
@@ -1079,6 +1100,25 @@ async def test_session_tree_choices_indent_only_diverged_branches(tmp_path: Path
 
 
 @pytest.mark.anyio
+async def test_tree_choices_label_whitespace_tool_calls(tmp_path: Path) -> None:
+    storage = JsonlSessionStorage(tmp_path / "session.jsonl")
+    entry = MessageEntry(
+        id="tool-call",
+        message=AssistantMessage(
+            content="   ",
+            tool_calls=[ToolCall(id="call-1", name="read", arguments={"path": "README.md"})],
+        ),
+    )
+    await storage.append(entry)
+    await storage.append(LeafEntry(entry_id="tool-call"))
+    session = await CodingSession.load(_config(tmp_path, FakeProvider([]), storage))
+
+    choices = await session.tree_choices()
+
+    assert choices[0].label == "tool call: read"
+
+
+@pytest.mark.anyio
 async def test_session_branches_to_previous_entry_without_destroying_history(
     tmp_path: Path,
 ) -> None:
@@ -1196,7 +1236,9 @@ async def test_session_branches_to_before_selected_user_message_with_prefill(
 
 
 @pytest.mark.anyio
-async def test_session_branch_preserves_active_model_after_historical_model_change(tmp_path: Path) -> None:
+async def test_session_branch_preserves_active_model_after_historical_model_change(
+    tmp_path: Path,
+) -> None:
     storage = JsonlSessionStorage(tmp_path / "session.jsonl")
     first_model = ModelChangeEntry(id="model-a", model="first-model")
     left = MessageEntry(
@@ -3034,10 +3076,10 @@ def test_minimal_commands_are_handled(tmp_path: Path) -> None:
 
     assert session.handle_command("hello").handled is False
     assert session.handle_command("/new").new_session_requested is True
-    assert session.handle_command("/clear").message == "Unknown command: /clear"
+    assert session.handle_command("/clear").handled is False
     assert session.handle_command("/quit").exit_requested is True
     assert session.handle_command("/exit").exit_requested is True
-    assert session.handle_command("/unknown").message == "Unknown command: /unknown"
+    assert session.handle_command("/unknown").handled is False
 
 
 def test_branch_summary_hides_raw_argument_fallbacks() -> None:

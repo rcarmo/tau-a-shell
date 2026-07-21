@@ -42,6 +42,8 @@ HIDDEN_THINKING_PLACEHOLDER = "Thinking… Press Ctrl+T to show thinking tokens.
 TRUNCATED_THINKING_PLACEHOLDER = "Earlier thinking hidden to keep the TUI responsive."
 MAX_VISIBLE_THINKING_ITEMS = 20
 MAX_VISIBLE_THINKING_CHARS = 20_000
+TRANSCRIPT_WINDOW_ITEMS = 200
+TRANSCRIPT_WINDOW_OVERSCAN_ITEMS = 40
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,10 @@ class SessionSummarySource(Protocol):
 class SessionSidebar(Static):
     """Compact sidebar with current session metadata."""
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._summary_fingerprint: tuple[object, ...] | None = None
+
     def update_from_session(
         self,
         session: SessionSummarySource,
@@ -98,11 +104,19 @@ class SessionSidebar(Static):
         theme: TuiTheme = TAU_DARK_THEME,
     ) -> None:
         """Redraw the sidebar from current session metadata."""
+        fingerprint = _session_summary_fingerprint(session, theme=theme)
+        if fingerprint == self._summary_fingerprint:
+            return
+        self._summary_fingerprint = fingerprint
         self.update(render_session_sidebar(session, theme=theme))
 
 
 class CompactSessionInfo(Static):
     """Single-line session metadata for narrow TUI layouts."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._summary_fingerprint: tuple[object, ...] | None = None
 
     def update_from_session(
         self,
@@ -111,6 +125,10 @@ class CompactSessionInfo(Static):
         theme: TuiTheme = TAU_DARK_THEME,
     ) -> None:
         """Redraw compact session metadata."""
+        fingerprint = _session_summary_fingerprint(session, theme=theme)
+        if fingerprint == self._summary_fingerprint:
+            return
+        self._summary_fingerprint = fingerprint
         self.update(render_compact_session_info(session, theme=theme))
 
 
@@ -430,10 +448,14 @@ class TranscriptView(VerticalScroll):
             for child in self.children
             if isinstance(child, TranscriptMessageWidget | StreamingTranscriptMessageWidget)
         ]
-        desired = _visible_transcript_items(state)
+        desired = _windowed_transcript_items(_visible_transcript_items(state))
         reusable_count = 0
-        for existing, (item, show_tool_results) in zip(existing_widgets, desired):
-            if _transcript_widget_key(existing) != _transcript_item_key(item, show_tool_results):
+        for existing, (item, show_tool_results) in zip(
+            existing_widgets, desired, strict=False
+        ):
+            if _transcript_widget_key(existing) != _transcript_item_key(
+                item, show_tool_results
+            ):
                 break
             reusable_count += 1
 
@@ -475,6 +497,11 @@ class TranscriptView(VerticalScroll):
             show_tool_results=show_tool_results,
         )
         await self.mount(widget)
+        if len(self.children) > (
+            TRANSCRIPT_WINDOW_ITEMS + TRANSCRIPT_WINDOW_OVERSCAN_ITEMS
+        ):
+            self._redraw(scroll_end=should_follow)
+            return widget
         self._active_assistant_widget = None
         self._active_thinking_widget = None
         self._hidden_thinking_placeholder_visible = False
@@ -628,8 +655,24 @@ def _visible_transcript_items(state: TuiState) -> list[tuple[ChatItem, bool]]:
             continue
         desired.append((item, state.show_tool_results or item.always_show_tool_result))
     if state.assistant_buffer:
-        desired.append((ChatItem(role="assistant", text=state.assistant_buffer), state.show_tool_results))
+        desired.append(
+            (ChatItem(role="assistant", text=state.assistant_buffer), state.show_tool_results)
+        )
     return desired
+
+
+def _windowed_transcript_items(
+    desired: list[tuple[ChatItem, bool]],
+) -> list[tuple[ChatItem, bool]]:
+    """Return the newest transcript window with a synthetic hidden-count marker."""
+    if len(desired) <= TRANSCRIPT_WINDOW_ITEMS:
+        return desired
+    hidden_count = len(desired) - TRANSCRIPT_WINDOW_ITEMS
+    boundary = ChatItem(
+        role="status",
+        text=f"Earlier transcript items hidden for performance: {hidden_count}",
+    )
+    return [(boundary, False), *desired[-TRANSCRIPT_WINDOW_ITEMS:]]
 
 
 def _visible_thinking_item_ids(state: TuiState) -> set[int]:
@@ -812,6 +855,28 @@ def _clip_selection_offset(offset: Offset | None, lines: list[str]) -> Offset | 
     line_index = min(max(offset.y, 0), len(lines) - 1)
     column = min(max(offset.x, 0), len(lines[line_index]))
     return Offset(column, line_index)
+
+
+def _session_summary_fingerprint(
+    session: SessionSummarySource,
+    *,
+    theme: TuiTheme,
+) -> tuple[object, ...]:
+    """Return a stable key for sidebar/compact session metadata redraws."""
+    return (
+        theme.name,
+        str(session.cwd),
+        session.provider_name,
+        session.model,
+        session.thinking_level,
+        session.context_token_estimate,
+        session.auto_compact_token_threshold,
+        session.context_window_tokens,
+        tuple(tool.name for tool in session.tools),
+        tuple(skill.name for skill in session.skills),
+        tuple(template.name for template in session.prompt_templates),
+        tuple(str(context.path) for context in session.context_files),
+    )
 
 
 def render_session_sidebar(

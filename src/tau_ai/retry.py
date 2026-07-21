@@ -10,7 +10,7 @@ from tau_ai.provider import CancellationToken
 
 RETRY_POLL_SECONDS = 0.05
 RETRY_BASE_DELAY_SECONDS = 0.25
-TRANSIENT_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+TRANSIENT_STATUS_CODES = {408, 409, 425, 429}
 
 
 def retry_delay_seconds(attempt: int, *, max_delay_seconds: float) -> float:
@@ -23,7 +23,7 @@ def retry_delay_seconds(attempt: int, *, max_delay_seconds: float) -> float:
 
 def is_transient_status(status_code: int) -> bool:
     """Return whether an HTTP status usually represents a transient provider error."""
-    return status_code in TRANSIENT_STATUS_CODES
+    return status_code in TRANSIENT_STATUS_CODES or status_code >= 500
 
 
 def provider_retry_event(

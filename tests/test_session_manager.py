@@ -161,3 +161,13 @@ def test_session_manager_sorts_newest_updated_first(tmp_path: Path) -> None:
 
     assert [session.id for session in sessions] == ["older", "newer"]
     assert newer in sessions
+
+
+def test_session_manager_round_trips_unicode_line_separator_in_title(tmp_path: Path) -> None:
+    manager = SessionManager(TauPaths(home=tmp_path / ".tau", agents_home=tmp_path / ".agents"))
+    cwd = tmp_path / "project"
+    cwd.mkdir()
+    record = manager.create_session(cwd=cwd, model="fake", title="first\u2028second")
+
+    assert manager.get_session(record.id).title == "first\u2028second"  # type: ignore[union-attr]
+    assert manager.list_sessions(cwd)[0].title == "first\u2028second"
