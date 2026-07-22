@@ -158,7 +158,7 @@ Useful commands include:
 /theme
 ```
 
-Sessions are append-only JSONL files under `~/.tau/sessions/`. Project instructions can be supplied through `AGENTS.md`, `.tau/` and `.agents/` resources. See [context compaction](docs/compaction.md) for adaptive local summaries and verified OpenAI/Codex provider-native compaction.
+Sessions are append-only JSONL files under `~/.tau/sessions/`. Project instructions can be supplied through `AGENTS.md`, `.tau/` and `.agents/` resources. See [context compaction](docs/compaction.md) for adaptive local summaries and verified OpenAI/Codex provider-native compaction, and [extensions](docs/extensions.md) for the local Python extension seam.
 
 One-shot mode is available for scripts and short queries:
 

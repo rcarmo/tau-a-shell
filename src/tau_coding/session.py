@@ -45,7 +45,12 @@ from tau_ai import (
 from tau_ai.events import ProviderErrorEvent, ProviderResponseEndEvent, ProviderTextDeltaEvent
 from tau_ai.model_limits import RuntimeModelLimits
 from tau_coding.branch_summary import summarize_branch_messages_with_model
-from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
+from tau_coding.commands import (
+    CommandContext,
+    CommandRegistry,
+    CommandResult,
+    create_default_command_registry,
+)
 from tau_coding.context import discover_project_context_with_diagnostics
 from tau_coding.context_window import (
     DEFAULT_COMPACTION_KEEP_RECENT_TOKENS,
@@ -64,6 +69,7 @@ from tau_coding.diagnostics import (
     AgentCallDiagnosticLogger,
     new_agent_call_run_id,
 )
+from tau_coding.extensions.runtime import ExtensionRuntime
 from tau_coding.paths import TauPaths
 from tau_coding.pipelined_compaction import build_pipelined_compaction_prompt
 from tau_coding.prompt_templates import (
@@ -247,6 +253,7 @@ class CodingSession:
         self._context_files = context_files
         self._resource_diagnostics = resource_diagnostics
         self._command_registry = command_registry or create_default_command_registry()
+        self._extension_runtime = ExtensionRuntime()
         self._provider_name = config.provider_name
         self._provider_settings = config.provider_settings
         self._runtime_provider_config = config.runtime_provider_config
@@ -299,7 +306,21 @@ class CodingSession:
             )
         )
         resource_paths = resource_paths_with_cwd(config.resource_paths, config.cwd)
+        extension_runtime = ExtensionRuntime()
+        extension_runtime.load(resource_paths)
+        if extension_runtime.tools:
+            tools = [*tools, *extension_runtime.tools.values()]
+        command_registry = extension_runtime.command_registry(
+            config.command_registry or create_default_command_registry()
+        )
         resources = _load_session_resources(resource_paths, config.context_files)
+        append_system_prompt = config.append_system_prompt
+        if extension_runtime.prompt_guidelines:
+            guidelines = "\n".join(extension_runtime.prompt_guidelines)
+            append_system_prompt = (
+                f"{append_system_prompt}\n{guidelines}" if append_system_prompt else guidelines
+            )
+        config = replace(config, command_registry=command_registry)
         system = (
             config.system
             if config.system is not None
@@ -309,7 +330,7 @@ class CodingSession:
                     tools=tools,
                     skills=resources.skills,
                     custom_prompt=config.custom_system_prompt,
-                    append_system_prompt=config.append_system_prompt,
+                    append_system_prompt=append_system_prompt,
                     context_files=resources.context_files,
                 )
             )
@@ -335,6 +356,7 @@ class CodingSession:
             command_registry=config.command_registry,
             pending_initial_entries=pending_initial_entries,
         )
+        session._extension_runtime = extension_runtime
         await session._persist_loaded_interrupted_tool_repairs()
         session._sync_thinking_level_to_active_model()
         session._refresh_runtime_provider()
@@ -650,6 +672,11 @@ class CodingSession:
         if provider is None:
             return DEFAULT_CONTEXT_WINDOW_TOKENS
         return provider.context_windows.get(self.model, DEFAULT_CONTEXT_WINDOW_TOKENS)
+
+    @property
+    def extension_runtime(self) -> ExtensionRuntime:
+        """Return the loaded extension runtime."""
+        return self._extension_runtime
 
     @property
     def command_registry(self) -> CommandRegistry:
@@ -1271,6 +1298,16 @@ class CodingSession:
         """Append a user prompt, run the agent, and persist new messages."""
         context = self._diagnostic_context()
         try:
+            extension_context = self._extension_runtime.extension_context(
+                CommandContext(
+                    session=self,
+                    registry=self._command_registry,
+                    text=content,
+                    name="prompt",
+                    args="",
+                )
+            )
+            content = self._extension_runtime.transform_input(extension_context, content)
             expanded_content = self.expand_prompt_text(content)
         except ResourceError:
             raise
