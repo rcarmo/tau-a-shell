@@ -295,7 +295,7 @@ def main(
                     notice,
                 )
             else:
-                anyio.run(
+                resumable_session_id = anyio.run(
                     run_openai_tui,
                     model,
                     cwd or Path.cwd(),
@@ -306,6 +306,8 @@ def main(
                     initial_prompt,
                     notice,
                 )
+                if resumable_session_id is not None:
+                    typer.echo(f"To resume this session: tau --resume {resumable_session_id}")
         except (RuntimeError, ValueError) as exc:
             raise typer.BadParameter(str(exc)) from exc
         raise typer.Exit()
@@ -335,9 +337,9 @@ async def run_openai_tui(
     auto_compact_token_threshold: int | None = None,
     initial_prompt: str | None = None,
     update_notice: UpdateNotice | None = None,
-) -> None:
+) -> str | None:
     """Run the Textual TUI with the default OpenAI-compatible provider."""
-    await run_tui_app(
+    return await run_tui_app(
         model=model,
         cwd=cwd,
         session_id=session_id,

@@ -4163,7 +4163,7 @@ async def run_tui_app(
     initial_prompt: str | None = None,
     session_manager: SessionManager | None = None,
     startup_notice: str | None = None,
-) -> None:
+) -> str | None:
     """Create the default provider/session and run the Textual app."""
     if new_session and session_id is not None:
         raise RuntimeError("--resume and --new-session cannot be used together")
@@ -4249,6 +4249,12 @@ async def run_tui_app(
             initial_prompt=initial_prompt,
         )
         await app.run_async()
+        active_session_id = getattr(session, "session_id", None)
+        if not isinstance(active_session_id, str):
+            return None
+        if manager.get_session(active_session_id) is None:
+            return None
+        return active_session_id
     finally:
         if session is not None:
             close_session = getattr(session, "aclose", None)

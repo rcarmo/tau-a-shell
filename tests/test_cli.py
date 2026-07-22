@@ -1,5 +1,5 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -52,6 +52,34 @@ def _panel_text(value: str) -> str:
     no_ansi = _strip_ansi(value)
     borders = str.maketrans({ch: " " for ch in "│╭╮╰╯─"})
     return _collapse_ws(no_ansi.translate(borders))
+
+
+def test_tui_prints_resume_hint_after_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_tui(*args: object, **kwargs: object) -> str:
+        del args, kwargs
+        return "session-123"
+
+    monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
+    monkeypatch.setattr(cli, "run_openai_tui", fake_tui)
+
+    result = CliRunner().invoke(app, [])
+
+    assert result.exit_code == 0
+    assert "tau --resume session-123" in result.output
+
+
+def test_tui_suppresses_resume_hint_without_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_tui(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        return None
+
+    monkeypatch.setattr(cli, "_startup_update_notice", lambda: None)
+    monkeypatch.setattr(cli, "run_openai_tui", fake_tui)
+
+    result = CliRunner().invoke(app, [])
+
+    assert result.exit_code == 0
+    assert "tau --resume" not in result.output
 
 
 def test_version_command() -> None:
@@ -265,13 +293,19 @@ def test_cli_web_mode_invokes_textual_web_runner(
     )
 
     assert result.exit_code == 0
-    assert calls == [("gpt-test", tmp_path, None, False, None, None, "inspect this", "0.0.0.0", 9001)]
+    assert calls == [
+        ("gpt-test", tmp_path, None, False, None, None, "inspect this", "0.0.0.0", 9001)
+    ]
 
 
 def test_textual_web_command_includes_host_port_and_inner_tui_args(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/textual-web" if name == "textual-web" else None)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/textual-web" if name == "textual-web" else None,
+    )
     monkeypatch.setattr(cli.sys, "executable", "/usr/bin/python3")
 
     command = cli._textual_web_command(
