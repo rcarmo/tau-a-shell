@@ -23,6 +23,7 @@ from tau_ai.events import (
     ProviderToolCallEvent,
 )
 from tau_ai.fake import FakeProvider
+from tau_ai.model_limits import ModelLimitsProvider, RuntimeModelLimits
 from tau_ai.models import ModelInfo, list_openai_compatible_models
 from tau_ai.observability import (
     LLMObservation,
@@ -58,6 +59,7 @@ __all__ = [
     "DEFAULT_OPENAI_CODEX_BASE_URL",
     "FakeProvider",
     "ModelInfo",
+    "ModelLimitsProvider",
     "ModelProvider",
     "OpenAICodexConfig",
     "OpenAICodexCredentials",
@@ -77,6 +79,7 @@ __all__ = [
     "REMOTE_COMPACTION_SENTINEL",
     "RemoteCompactionProvider",
     "RemoteCompactionState",
+    "RuntimeModelLimits",
     "list_openai_compatible_models",
     "observe_llm_error",
     "observe_llm_request",

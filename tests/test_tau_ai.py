@@ -579,6 +579,49 @@ async def test_openai_codex_provider_includes_plain_http_error_body_in_message()
 
 
 @pytest.mark.anyio
+async def test_openai_codex_provider_discovers_runtime_model_limits() -> None:
+    requests: list[httpx.Request] = []
+
+    async def credentials() -> OpenAICodexCredentials:
+        return OpenAICodexCredentials(access_token="access-token", account_id="account-1")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "slug": "gpt-5.3-codex",
+                        "max_context_window": 400000,
+                        "max_output_tokens": 100000,
+                        "effective_context_window_percent": 80,
+                        "auto_compact_token_limit": 250000,
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAICodexProvider(
+            OpenAICodexConfig(
+                credential_resolver=credentials,
+                base_url="https://chatgpt.test/backend-api",
+            ),
+            client=client,
+        )
+        limits = await provider.discover_model_limits("gpt-5.3-codex")
+
+    assert requests[0].url == "https://chatgpt.test/backend-api/codex/models"
+    assert requests[0].headers["authorization"] == "Bearer access-token"
+    assert limits is not None
+    assert limits.context_window == 400000
+    assert limits.max_output_tokens == 100000
+    assert limits.effective_context_window == 320000
+    assert limits.effective_auto_compact_token_limit == 250000
+
+
+@pytest.mark.anyio
 async def test_openai_codex_provider_formats_request_and_streams_text() -> None:
     requests: list[httpx.Request] = []
 

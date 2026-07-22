@@ -2881,6 +2881,54 @@ async def test_tui_app_session_picker_shows_human_readable_session_metadata() ->
 
 
 @pytest.mark.anyio
+async def test_tui_app_session_picker_filters_by_title_not_workspace_path() -> None:
+    session = FakeSession(messages=[])
+    session.session_manager = _FakeSessionManager(
+        [
+            CodingSessionRecord(
+                id="session-1",
+                path=Path("/tmp/session-1.jsonl"),
+                cwd=Path("/workspace/secret-project"),
+                model="fake-model",
+                title="Visible work",
+                created_at=1.0,
+                updated_at=3.0,
+            ),
+            CodingSessionRecord(
+                id="session-2",
+                path=Path("/tmp/session-2.jsonl"),
+                cwd=Path("/workspace/other"),
+                model="other-model",
+                title="Needle session",
+                created_at=2.0,
+                updated_at=4.0,
+            ),
+        ]
+    )
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+r")
+        assert isinstance(app.screen, SessionPickerScreen)
+        search = app.screen.query_one("#session-picker-search", Input)
+        search.value = "needle"
+        await pilot.pause()
+        labels = [
+            item.query_one(Label).content
+            for item in app.screen.query_one("#session-picker-list", ListView).children
+        ]
+        search.value = "secret-project"
+        await pilot.pause()
+        path_labels = [
+            item.query_one(Label).content
+            for item in app.screen.query_one("#session-picker-list", ListView).children
+        ]
+
+    assert labels == ["1970-01-01 01:00 - other-model - Needle session"]
+    assert path_labels == []
+
+
+@pytest.mark.anyio
 async def test_tui_app_session_picker_arrow_keys_select_session() -> None:
     session = FakeSession(messages=[UserMessage(content="Earlier")])
     session.session_manager = _FakeSessionManager(

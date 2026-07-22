@@ -37,11 +37,13 @@ from tau_agent.types import JSONValue
 from tau_ai import (
     REMOTE_COMPACTION_SENTINEL,
     LLMObserver,
+    ModelLimitsProvider,
     ModelProvider,
     RemoteCompactionProvider,
     RemoteCompactionState,
 )
 from tau_ai.events import ProviderErrorEvent, ProviderResponseEndEvent, ProviderTextDeltaEvent
+from tau_ai.model_limits import RuntimeModelLimits
 from tau_coding.branch_summary import summarize_branch_messages_with_model
 from tau_coding.commands import CommandRegistry, CommandResult, create_default_command_registry
 from tau_coding.context import discover_project_context_with_diagnostics
@@ -254,6 +256,7 @@ class CodingSession:
         self._auto_compact_enabled = config.auto_compact_enabled
         self._provider_compaction_enabled = config.provider_compaction_enabled
         self._compaction_strategy = config.compaction_strategy
+        self._runtime_model_limits: RuntimeModelLimits | None = None
         self._thinking_level = _state_thinking_level(state, config.thinking_level)
         self._apply_remote_compaction_state(self._latest_remote_compaction_state())
         self._owned_providers: list[ClosableModelProvider] = []
@@ -634,11 +637,15 @@ class CodingSession:
             return None
         if self._auto_compact_token_threshold is not None:
             return self._auto_compact_token_threshold
+        if self._runtime_model_limits is not None:
+            return self._runtime_model_limits.effective_auto_compact_token_limit
         return auto_compaction_threshold_for_context_window(self.context_window_tokens)
 
     @property
     def context_window_tokens(self) -> int:
         """Return the active model's configured context window, or Tau's fallback."""
+        if self._runtime_model_limits is not None:
+            return self._runtime_model_limits.effective_context_window
         provider = self._active_provider_config()
         if provider is None:
             return DEFAULT_CONTEXT_WINDOW_TOKENS
@@ -931,6 +938,7 @@ class CodingSession:
         self._owned_providers.append(provider)
         self._harness.config.provider = provider
         self._runtime_provider_config = provider_config
+        self._runtime_model_limits = None
         remote = self._latest_remote_compaction_state()
         if remote is not None:
             setter = getattr(provider, "set_remote_compaction_state", None)
@@ -1166,6 +1174,7 @@ class CodingSession:
 
     async def compact(self, instructions: str | None = None) -> str:
         """Generate a manual compaction summary and rebuild active context."""
+        await self._refresh_runtime_model_limits()
         if self._harness.is_running:
             raise RuntimeError("Cannot compact while the agent is running")
         plan = self._manual_compaction_plan()
@@ -1273,6 +1282,7 @@ class CodingSession:
             )
             raise
 
+        await self._refresh_runtime_model_limits()
         if self._harness.is_running:
             if streaming_behavior == "steer":
                 yield self._harness.steer(expanded_content)
@@ -1333,6 +1343,7 @@ class CodingSession:
     async def continue_(self) -> AsyncIterator[AgentEvent]:
         """Continue the agent from restored state and persist new messages."""
         context = self._diagnostic_context()
+        await self._refresh_runtime_model_limits()
         persisted_count = len(self._harness.messages)
         try:
             async for event in self._harness.continue_():
@@ -1354,6 +1365,16 @@ class CodingSession:
                 exc=exc,
             )
             raise
+
+    async def _refresh_runtime_model_limits(self) -> None:
+        provider = self._harness.config.provider
+        if not isinstance(provider, ModelLimitsProvider):
+            self._runtime_model_limits = None
+            return
+        try:
+            self._runtime_model_limits = await provider.discover_model_limits(self.model)
+        except Exception:
+            self._runtime_model_limits = None
 
     def _diagnostic_context(self) -> AgentCallDiagnosticContext:
         return AgentCallDiagnosticContext(

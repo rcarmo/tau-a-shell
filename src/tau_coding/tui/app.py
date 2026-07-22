@@ -107,6 +107,7 @@ from tau_coding.tui.config import (
     load_tui_settings,
     save_tui_settings,
 )
+from tau_coding.tui.file_drop import normalize_dropped_paths
 from tau_coding.tui.state import TuiState, format_terminal_command_result_block
 from tau_coding.tui.widgets import (
     CompactSessionInfo,
@@ -388,7 +389,16 @@ class PromptInput(TextArea):
         self.action_completion_previous()
 
     def _detect_paste(self, new_text: str) -> None:
-        """Detect large paste and show placeholder in the input box."""
+        """Detect file drops and large paste placeholders in the input box."""
+        normalized_drop = normalize_dropped_paths(new_text)
+        if normalized_drop is not None and normalized_drop != new_text:
+            self.text = normalized_drop
+            self.move_cursor((0, len(normalized_drop)))
+            self._pending_full_content = None
+            self._placeholder = ""
+            self._last_text_length = len(normalized_drop)
+            return
+
         new_len = len(new_text)
         delta = new_len - self._last_text_length
 
@@ -497,26 +507,21 @@ class SessionPickerScreen(ModalScreen[str | None]):
     ) -> None:
         super().__init__()
         self.records = tuple(records)
+        self.filtered_records = tuple(records)
         self.theme = theme
 
     def compose(self) -> ComposeResult:
         """Compose the session picker."""
         with Vertical(id="session-picker"):
             yield Static("Sessions", id="session-picker-title")
-            yield ListView(
-                *[
-                    ListItem(Label(_session_picker_label(record), markup=False))
-                    for record in self.records
-                ],
-                id="session-picker-list",
-            )
-            yield Static("Enter selects - Escape closes", id="session-picker-help")
+            yield Input(placeholder="Search sessions", id="session-picker-search")
+            yield ListView(id="session-picker-list")
+            yield Static("Type to filter - Enter selects - Escape closes", id="session-picker-help")
 
     def on_mount(self) -> None:
-        """Focus the session list for keyboard navigation."""
-        session_list = self.query_one("#session-picker-list", ListView)
-        session_list.index = 0
-        session_list.focus()
+        """Focus the session search field for keyboard filtering."""
+        self._refresh_records()
+        self.query_one("#session-picker-search", Input).focus()
 
     def on_key(self, event: Key) -> None:
         """Route session picker keys to the list."""
@@ -530,9 +535,27 @@ class SessionPickerScreen(ModalScreen[str | None]):
             event.stop()
             self.action_select_cursor()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "session-picker-search":
+            self._refresh_records(query=event.value)
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Dismiss with the selected session id."""
-        self.dismiss(self.records[event.index].id)
+        if 0 <= event.index < len(self.filtered_records):
+            self.dismiss(self.filtered_records[event.index].id)
+
+    def _refresh_records(self, *, query: str = "") -> None:
+        normalized = query.strip().casefold()
+        self.filtered_records = tuple(
+            record for record in self.records if _session_picker_matches(record, normalized)
+        )
+        session_list = self.query_one("#session-picker-list", ListView)
+        session_list.clear()
+        session_list.extend(
+            ListItem(Label(_session_picker_label(record), markup=False))
+            for record in self.filtered_records
+        )
+        session_list.index = 0 if self.filtered_records else None
 
     def action_cursor_up(self) -> None:
         """Move to the previous session."""
@@ -3614,6 +3637,20 @@ def _session_picker_label(record: SessionCompletionRecord) -> str:
     if title is not None:
         parts.append(title)
     return " - ".join(parts)
+
+
+def _session_picker_matches(record: SessionCompletionRecord, query: str) -> bool:
+    if not query:
+        return True
+    title = _named_session_title(record.title) or ""
+    haystack = " ".join(
+        (
+            record.id,
+            title,
+            record.model,
+        )
+    ).casefold()
+    return query in haystack
 
 
 def _tree_picker_label(choice: SessionTreeChoice, *, theme: TuiTheme) -> Text:

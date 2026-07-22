@@ -29,6 +29,7 @@ from tau_ai.events import (
     ProviderToolCallEvent,
 )
 from tau_ai.http import create_async_client
+from tau_ai.model_limits import RuntimeModelLimits
 from tau_ai.observability import (
     LLMObserver,
     observe_llm_error,
@@ -71,6 +72,7 @@ class OpenAICodexConfig:
     originator: str = "tau"
     reasoning_effort: str | None = None
     reasoning_summary: str = "auto"
+    model_catalog_timeout_seconds: float = 5.0
 
 
 class OpenAICodexProvider:
@@ -88,6 +90,34 @@ class OpenAICodexProvider:
         self._owns_client = client is None
         self._observer = observer
         self._remote_compaction_state: RemoteCompactionState | None = None
+        self._model_limits_cache: dict[str, RuntimeModelLimits] | None = None
+
+    async def discover_model_limits(self, model: str) -> RuntimeModelLimits | None:
+        """Return live Codex model limits from the authenticated model catalog."""
+        if self._model_limits_cache is None:
+            self._model_limits_cache = await self._fetch_model_limits()
+        return self._model_limits_cache.get(model)
+
+    async def _fetch_model_limits(self) -> dict[str, RuntimeModelLimits]:
+        try:
+            credentials = await self._config.credential_resolver()
+            headers = _build_codex_headers(
+                self._config.headers,
+                access_token=credentials.access_token,
+                account_id=credentials.account_id,
+                originator=self._config.originator,
+            )
+            response = await self._get_client().get(
+                _resolve_codex_models_url(self._config.base_url),
+                headers=headers,
+                timeout=self._config.model_catalog_timeout_seconds,
+            )
+            if response.status_code >= 400:
+                return {}
+            data = response.json()
+            return _parse_codex_model_limits(data)
+        except Exception:
+            return {}
 
     def set_remote_compaction_state(self, state: RemoteCompactionState | None) -> None:
         """Configure canonical state to inject into subsequent Codex requests."""
@@ -975,6 +1005,50 @@ def _resolve_codex_url(base_url: str) -> str:
     if normalized.endswith("/codex"):
         return f"{normalized}/responses"
     return f"{normalized}/codex/responses"
+
+
+def _resolve_codex_models_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/codex/responses"):
+        return f"{normalized.removesuffix('/responses')}/models"
+    if normalized.endswith("/codex"):
+        return f"{normalized}/models"
+    return f"{normalized}/codex/models"
+
+
+def _parse_codex_model_limits(payload: object) -> dict[str, RuntimeModelLimits]:
+    if not isinstance(payload, Mapping):
+        return {}
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return {}
+
+    parsed: dict[str, RuntimeModelLimits] = {}
+    for item in models:
+        if not isinstance(item, Mapping):
+            continue
+        model = item.get("slug")
+        context_window = _positive_int(item.get("context_window")) or _positive_int(
+            item.get("max_context_window")
+        )
+        if not isinstance(model, str) or not model or context_window is None:
+            continue
+        effective_percent = _positive_int(item.get("effective_context_window_percent")) or 100
+        if effective_percent > 100:
+            continue
+        parsed[model] = RuntimeModelLimits(
+            context_window=context_window,
+            max_output_tokens=_positive_int(item.get("max_output_tokens")),
+            effective_context_window_percent=effective_percent,
+            auto_compact_token_limit=_positive_int(item.get("auto_compact_token_limit")),
+        )
+    return parsed
+
+
+def _positive_int(value: object) -> int | None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return None
+    return value
 
 
 def _split_tool_call_id(value: str) -> tuple[str, str | None]:

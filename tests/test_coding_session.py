@@ -33,6 +33,7 @@ from tau_ai import (
     ProviderEvent,
     ProviderResponseEndEvent,
     ProviderResponseStartEvent,
+    RuntimeModelLimits,
 )
 from tau_coding import (
     CodingSession,
@@ -726,6 +727,34 @@ def test_ordered_tree_entries_terminates_on_parent_cycle() -> None:
 
     assert sorted(entry.id for entry in ordered) == ["a", "b"]
     assert len(ordered) == 2
+
+
+@pytest.mark.anyio
+async def test_session_uses_runtime_model_limits_for_context_threshold(
+    tmp_path: Path,
+) -> None:
+    class LimitsProvider(FakeProvider):
+        async def discover_model_limits(self, model: str) -> RuntimeModelLimits | None:
+            assert model == "fake"
+            return RuntimeModelLimits(
+                context_window=100_000,
+                effective_context_window_percent=80,
+                auto_compact_token_limit=70_000,
+            )
+
+    session = await CodingSession.load(
+        _config(
+            tmp_path,
+            LimitsProvider([[ProviderResponseEndEvent(message=AssistantMessage(content="ok"))]]),
+            JsonlSessionStorage(tmp_path / "session.jsonl"),
+        )
+    )
+
+    assert session.context_window_tokens != 80_000
+    await _collect_session_events(session.prompt("hello"))
+
+    assert session.context_window_tokens == 80_000
+    assert session.auto_compact_token_threshold == 70_000
 
 
 @pytest.mark.anyio
