@@ -1954,6 +1954,7 @@ class TauTuiApp(App[None]):
                 strategy=self.tui_settings.compaction_strategy,
             )
         self.state = TuiState(skills=session.skills)
+        self._install_extension_renderers()
         if startup_notice:
             self.state.add_item("status", startup_notice)
         self._prompt_history: tuple[str, ...] = ()
@@ -1994,6 +1995,14 @@ class TauTuiApp(App[None]):
             with suppress(Exception):
                 pyperclip.copy(text)
         super().copy_to_clipboard(text)
+
+    def _install_extension_renderers(self) -> None:
+        runtime = getattr(self.session, "extension_runtime", None)
+        if runtime is None:
+            return
+        self.state.custom_renderer = runtime.render_message
+        self.state.tool_call_renderer = runtime.render_tool_call
+        self.state.tool_result_renderer = runtime.render_tool_result
 
     def on_app_blur(self) -> None:
         """Track terminal focus for background turn-finished notifications."""

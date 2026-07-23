@@ -41,6 +41,8 @@ def setup(tau):
         "demo",
         lambda context, args: CommandResult(handled=True, message=f"demo {args.strip()}"),
     )
+    tau.register_tool_call_renderer("demo_tool", lambda name, arguments: f"custom call {name}")
+    tau.register_tool_result_renderer("demo_tool", lambda result: f"custom result {result.content}")
     tau.register_tool(AgentTool(
         name="demo_tool",
         description="Demo tool",

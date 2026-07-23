@@ -738,6 +738,30 @@ def test_compaction_summary_chat_items_expand_with_tool_results_toggle() -> None
     assert "Detailed compaction text" in expanded
 
 
+def test_tui_state_uses_extension_tool_renderers() -> None:
+    state = tui_app.TuiState()
+    state.tool_call_renderer = lambda name, arguments: f"custom call {name} {arguments['path']}"
+    state.tool_result_renderer = lambda result: f"custom result {result.content}"
+
+    state.add_tool_call(ToolCall(id="call-1", name="read", arguments={"path": "README.md"}))
+    state.record_tool_result(
+        AgentToolResult(tool_call_id="call-1", name="read", ok=True, content="done")
+    )
+
+    assert state.items[0].text == "custom call read README.md"
+    assert state.items[0].tool_result_text == "custom result done"
+
+
+def test_tui_state_uses_extension_custom_message_renderer() -> None:
+    state = tui_app.TuiState()
+    state.custom_renderer = lambda custom_type, content, details: f"{custom_type}: {content}"
+
+    state.add_user_message("raw", custom_type="demo", details={"ok": True})
+
+    assert state.items[0].text == "demo: raw"
+    assert state.items[0].custom_type == "demo"
+
+
 def test_tui_state_compacts_branch_summary_messages() -> None:
     state = tui_app.TuiState()
 

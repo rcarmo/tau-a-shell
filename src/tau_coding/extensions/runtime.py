@@ -21,6 +21,9 @@ from tau_coding.extensions.api import (
     ExtensionLifecycleListener,
     ExtensionToolCallHook,
     ExtensionToolResultHook,
+    MessageRenderer,
+    ToolCallRenderer,
+    ToolResultRenderer,
 )
 from tau_coding.resources import ResourceDiagnostic, TauResourcePaths
 
@@ -47,6 +50,9 @@ class ExtensionRuntime:
         self.lifecycle_listeners: list[ExtensionLifecycleListener] = []
         self.tool_call_hooks: list[ExtensionToolCallHook] = []
         self.tool_result_hooks: list[ExtensionToolResultHook] = []
+        self.message_renderers: dict[str, MessageRenderer] = {}
+        self.tool_call_renderers: dict[str, ToolCallRenderer] = {}
+        self.tool_result_renderers: dict[str, ToolResultRenderer] = {}
         self.diagnostics: list[ResourceDiagnostic] = []
         self._modules: list[str] = []
 
@@ -69,6 +75,9 @@ class ExtensionRuntime:
         self.lifecycle_listeners.clear()
         self.tool_call_hooks.clear()
         self.tool_result_hooks.clear()
+        self.message_renderers.clear()
+        self.tool_call_renderers.clear()
+        self.tool_result_renderers.clear()
         self.diagnostics.clear()
 
     def command_registry(self, base: CommandRegistry) -> CommandRegistry:
@@ -252,6 +261,71 @@ class ExtensionRuntime:
             if updated is not None:
                 current = updated
         return current
+
+    def register_message_renderer(
+        self,
+        extension_name: str,
+        custom_type: str,
+        renderer: MessageRenderer,
+    ) -> None:
+        del extension_name
+        if custom_type.strip():
+            self.message_renderers[custom_type.strip()] = renderer
+
+    def register_tool_call_renderer(
+        self,
+        extension_name: str,
+        tool_name: str,
+        renderer: ToolCallRenderer,
+    ) -> None:
+        del extension_name
+        if tool_name.strip():
+            self.tool_call_renderers[tool_name.strip()] = renderer
+
+    def register_tool_result_renderer(
+        self,
+        extension_name: str,
+        tool_name: str,
+        renderer: ToolResultRenderer,
+    ) -> None:
+        del extension_name
+        if tool_name.strip():
+            self.tool_result_renderers[tool_name.strip()] = renderer
+
+    def render_tool_call(self, name: str, arguments: dict[str, JSONValue]) -> str | None:
+        renderer = self.tool_call_renderers.get(name)
+        if renderer is None:
+            return None
+        try:
+            return renderer(name, arguments)
+        except Exception as exc:  # noqa: BLE001 - extension isolation boundary
+            self._record_runtime_error(f"tool call renderer failed: {exc!r}")
+            return None
+
+    def render_tool_result(self, result: AgentToolResult) -> str | None:
+        renderer = self.tool_result_renderers.get(result.name)
+        if renderer is None:
+            return None
+        try:
+            return renderer(result)
+        except Exception as exc:  # noqa: BLE001 - extension isolation boundary
+            self._record_runtime_error(f"tool result renderer failed: {exc!r}")
+            return None
+
+    def render_message(
+        self,
+        custom_type: str,
+        content: str,
+        details: dict[str, JSONValue] | None,
+    ) -> str | None:
+        renderer = self.message_renderers.get(custom_type)
+        if renderer is None:
+            return None
+        try:
+            return renderer(content, details)
+        except Exception as exc:  # noqa: BLE001 - extension isolation boundary
+            self._record_runtime_error(f"message renderer failed: {exc!r}")
+            return None
 
     def wrap_tools(
         self,

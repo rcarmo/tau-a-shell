@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -37,6 +37,10 @@ class ChatItem:
     text: str
     tool_call_id: str | None = None
     tool_result_text: str | None = None
+    tool_name: str | None = None
+    tool_arguments: dict[str, JSONValue] | None = None
+    custom_type: str | None = None
+    details: dict[str, JSONValue] | None = None
     always_show_tool_result: bool = False
 
 
@@ -53,6 +57,9 @@ class TuiState:
     queued_steering: tuple[str, ...] = ()
     queued_follow_up: tuple[str, ...] = ()
     skills: tuple[Skill, ...] = ()
+    custom_renderer: Callable[[str, str, dict[str, JSONValue] | None], str | None] | None = None
+    tool_call_renderer: Callable[[str, dict[str, JSONValue]], str | None] | None = None
+    tool_result_renderer: Callable[[AgentToolResult], str | None] | None = None
 
     def add_item(
         self,
@@ -62,6 +69,8 @@ class TuiState:
         tool_call_id: str | None = None,
         tool_result_text: str | None = None,
         always_show_tool_result: bool = False,
+        custom_type: str | None = None,
+        details: dict[str, JSONValue] | None = None,
     ) -> None:
         """Append a transcript item."""
         if not text.strip() and tool_result_text is None:
@@ -72,6 +81,8 @@ class TuiState:
                 text=text,
                 tool_call_id=tool_call_id,
                 tool_result_text=tool_result_text,
+                custom_type=custom_type,
+                details=details,
                 always_show_tool_result=always_show_tool_result,
             )
         )
@@ -88,14 +99,37 @@ class TuiState:
                 tool_call_id=tool_call.id,
             )
             return
+        rendered = None
+        if self.tool_call_renderer is not None:
+            rendered = self.tool_call_renderer(tool_call.name, tool_call.arguments)
         self.add_item(
             "tool",
-            format_tool_call_block(tool_call),
+            rendered or format_tool_call_block(tool_call),
             tool_call_id=tool_call.id,
         )
+        self.items[-1].tool_name = tool_call.name
+        self.items[-1].tool_arguments = tool_call.arguments
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(
+        self,
+        content: str,
+        *,
+        custom_type: str | None = None,
+        details: dict[str, JSONValue] | None = None,
+    ) -> None:
         """Append a user-authored message, compacting skill and summary messages."""
+        if custom_type is not None:
+            rendered = None
+            if self.custom_renderer is not None:
+                rendered = self.custom_renderer(custom_type, content, details)
+            self.add_item(
+                "user",
+                rendered or content,
+                custom_type=custom_type,
+                details=details,
+            )
+            return
+
         branch_summary = _parse_branch_summary_message(content)
         if branch_summary is not None:
             self.add_item(
@@ -135,12 +169,16 @@ class TuiState:
         """Attach a tool result to its matching call, or append an orphan result."""
         if _is_blank_unknown_tool_result(result):
             return
-        result_text = format_tool_result_block(
-            name=result.name,
-            ok=result.ok,
-            content=result.content,
-            data=result.data,
-        )
+        result_text = None
+        if self.tool_result_renderer is not None:
+            result_text = self.tool_result_renderer(result)
+        if result_text is None:
+            result_text = format_tool_result_block(
+                name=result.name,
+                ok=result.ok,
+                content=result.content,
+                data=result.data,
+            )
         for item in reversed(self.items):
             if item.role in {"tool", "skill"} and item.tool_call_id == result.tool_call_id:
                 item.tool_result_text = result_text

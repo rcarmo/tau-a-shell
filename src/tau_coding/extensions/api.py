@@ -8,6 +8,7 @@ from typing import Protocol
 
 from tau_agent.events import AgentEvent
 from tau_agent.tools import AgentTool, AgentToolResult, ToolCall
+from tau_agent.types import JSONValue
 from tau_coding.commands import CommandResult
 
 
@@ -47,6 +48,18 @@ class ExtensionToolResultHook(Protocol):
         context: ExtensionContext,
         result: AgentToolResult,
     ) -> AgentToolResult | None: ...
+
+
+class MessageRenderer(Protocol):
+    def __call__(self, content: str, details: dict[str, JSONValue] | None = None) -> str: ...
+
+
+class ToolCallRenderer(Protocol):
+    def __call__(self, name: str, arguments: dict[str, JSONValue]) -> str: ...
+
+
+class ToolResultRenderer(Protocol):
+    def __call__(self, result: AgentToolResult) -> str: ...
 
 
 class ExtensionAPI:
@@ -95,6 +108,15 @@ class ExtensionAPI:
     def on_tool_result(self, hook: ExtensionToolResultHook) -> None:
         self._runtime.register_tool_result_hook(self._name, hook)
 
+    def register_message_renderer(self, custom_type: str, renderer: MessageRenderer) -> None:
+        self._runtime.register_message_renderer(self._name, custom_type, renderer)
+
+    def register_tool_call_renderer(self, tool_name: str, renderer: ToolCallRenderer) -> None:
+        self._runtime.register_tool_call_renderer(self._name, tool_name, renderer)
+
+    def register_tool_result_renderer(self, tool_name: str, renderer: ToolResultRenderer) -> None:
+        self._runtime.register_tool_result_renderer(self._name, tool_name, renderer)
+
 
 class ExtensionRuntimeProtocol(Protocol):
     def register_tool(self, extension_name: str, tool: AgentTool) -> None: ...
@@ -136,4 +158,25 @@ class ExtensionRuntimeProtocol(Protocol):
         self,
         extension_name: str,
         hook: ExtensionToolResultHook,
+    ) -> None: ...
+
+    def register_message_renderer(
+        self,
+        extension_name: str,
+        custom_type: str,
+        renderer: MessageRenderer,
+    ) -> None: ...
+
+    def register_tool_call_renderer(
+        self,
+        extension_name: str,
+        tool_name: str,
+        renderer: ToolCallRenderer,
+    ) -> None: ...
+
+    def register_tool_result_renderer(
+        self,
+        extension_name: str,
+        tool_name: str,
+        renderer: ToolResultRenderer,
     ) -> None: ...
