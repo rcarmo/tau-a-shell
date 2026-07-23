@@ -25,6 +25,10 @@ async def run_tool(arguments, signal=None):
 def setup(tau):
     tau.register_prompt_guideline("Prefer concise answers.")
     tau.register_input_hook(lambda context, text: text.replace("before", "after"))
+    def log_event(context, event):
+        open(context.cwd / "events.log", "a").write(event.type + "\\n")
+
+    tau.on_agent_event(log_event)
     tau.register_command(
         "demo",
         lambda context, args: CommandResult(handled=True, message=f"demo {args.strip()}"),
@@ -56,6 +60,7 @@ def setup(tau):
     await _drain(session.prompt("before text"))
 
     assert session.messages[0] == UserMessage(content="after text")
+    assert "message_update" in (tmp_path / "events.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.anyio

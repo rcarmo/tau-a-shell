@@ -60,7 +60,7 @@ async def test_agent_loop_streams_text_and_appends_assistant_message() -> None:
         )
     )
 
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -101,7 +101,7 @@ async def test_agent_loop_streams_thinking_deltas_without_recording_them() -> No
 
     thinking_events = [event for event in events if isinstance(event, ThinkingDeltaEvent)]
     assert [event.delta for event in thinking_events] == ["hidden ", "reasoning"]
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -165,7 +165,7 @@ async def test_agent_loop_executes_tools_and_continues_until_no_tool_calls() -> 
         )
     )
 
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -298,7 +298,8 @@ async def test_agent_loop_records_cancelled_results_for_skipped_tool_calls() -> 
             error="Tool call cancelled",
         ),
     ]
-    assert [event.type for event in events].count("tool_execution_end") == 2
+    event_types = [event.type for event in events if event.type != "message_update"]
+    assert event_types.count("tool_execution_end") == 2
 
 
 @pytest.mark.anyio
@@ -356,7 +357,7 @@ async def test_agent_loop_injects_steering_after_tool_batch() -> None:
         )
     )
 
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -424,7 +425,7 @@ async def test_agent_loop_injects_follow_up_only_when_run_would_stop() -> None:
         )
     )
 
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -505,7 +506,7 @@ async def test_agent_loop_converts_provider_error_to_agent_error() -> None:
     errors = [event for event in events if isinstance(event, ErrorEvent)]
 
     assert errors == [ErrorEvent(message="provider failed", recoverable=False)]
-    assert [event.type for event in events] == [
+    assert [event.type for event in events if event.type != "message_update"] == [
         "agent_start",
         "turn_start",
         "error",

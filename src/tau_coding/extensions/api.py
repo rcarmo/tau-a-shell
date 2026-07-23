@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from tau_agent.events import AgentEvent
 from tau_agent.tools import AgentTool
 from tau_coding.commands import CommandResult
 
@@ -26,6 +27,10 @@ class ExtensionCommandHandler(Protocol):
 
 class ExtensionInputHook(Protocol):
     def __call__(self, context: ExtensionContext, text: str) -> str | None: ...
+
+
+class ExtensionEventListener(Protocol):
+    def __call__(self, context: ExtensionContext, event: AgentEvent) -> None: ...
 
 
 class ExtensionAPI:
@@ -62,6 +67,9 @@ class ExtensionAPI:
     def register_input_hook(self, hook: ExtensionInputHook) -> None:
         self._runtime.register_input_hook(self._name, hook)
 
+    def on_agent_event(self, listener: ExtensionEventListener) -> None:
+        self._runtime.register_event_listener(self._name, listener)
+
 
 class ExtensionRuntimeProtocol(Protocol):
     def register_tool(self, extension_name: str, tool: AgentTool) -> None: ...
@@ -80,3 +88,9 @@ class ExtensionRuntimeProtocol(Protocol):
     def register_prompt_guideline(self, extension_name: str, guideline: str) -> None: ...
 
     def register_input_hook(self, extension_name: str, hook: ExtensionInputHook) -> None: ...
+
+    def register_event_listener(
+        self,
+        extension_name: str,
+        listener: ExtensionEventListener,
+    ) -> None: ...

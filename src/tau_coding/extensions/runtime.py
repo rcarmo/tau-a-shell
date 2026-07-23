@@ -8,12 +8,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from tau_agent.events import AgentEvent
 from tau_agent.tools import AgentTool
 from tau_coding.commands import CommandContext, CommandRegistry, CommandResult, SlashCommand
 from tau_coding.extensions.api import (
     ExtensionAPI,
     ExtensionCommandHandler,
     ExtensionContext,
+    ExtensionEventListener,
     ExtensionInputHook,
 )
 from tau_coding.resources import ResourceDiagnostic, TauResourcePaths
@@ -37,6 +39,7 @@ class ExtensionRuntime:
         self.commands: dict[str, ExtensionCommand] = {}
         self.prompt_guidelines: list[str] = []
         self.input_hooks: list[ExtensionInputHook] = []
+        self.event_listeners: list[ExtensionEventListener] = []
         self.diagnostics: list[ResourceDiagnostic] = []
         self._modules: list[str] = []
 
@@ -55,6 +58,7 @@ class ExtensionRuntime:
         self.commands.clear()
         self.prompt_guidelines.clear()
         self.input_hooks.clear()
+        self.event_listeners.clear()
         self.diagnostics.clear()
 
     def command_registry(self, base: CommandRegistry) -> CommandRegistry:
@@ -164,6 +168,27 @@ class ExtensionRuntime:
     def register_input_hook(self, extension_name: str, hook: ExtensionInputHook) -> None:
         del extension_name
         self.input_hooks.append(hook)
+
+    def register_event_listener(
+        self,
+        extension_name: str,
+        listener: ExtensionEventListener,
+    ) -> None:
+        del extension_name
+        self.event_listeners.append(listener)
+
+    def dispatch_agent_event(self, context: ExtensionContext, event: AgentEvent) -> None:
+        for listener in self.event_listeners:
+            try:
+                listener(context, event)
+            except Exception as exc:  # noqa: BLE001 - extension isolation boundary
+                self.diagnostics.append(
+                    ResourceDiagnostic(
+                        kind="extension",
+                        message=f"agent event listener failed: {exc!r}",
+                        severity="error",
+                    )
+                )
 
 
 def _extension_dirs(paths: TauResourcePaths) -> tuple[Path, ...]:

@@ -69,6 +69,7 @@ from tau_coding.diagnostics import (
     AgentCallDiagnosticLogger,
     new_agent_call_run_id,
 )
+from tau_coding.extensions.api import ExtensionContext
 from tau_coding.extensions.runtime import ExtensionRuntime
 from tau_coding.paths import TauPaths
 from tau_coding.pipelined_compaction import build_pipelined_compaction_prompt
@@ -1344,6 +1345,7 @@ class CodingSession:
                     )
                     if _is_context_overflow_error(event):
                         overflow_event = event
+                self._dispatch_extension_event(event)
                 yield event
                 if isinstance(event, MessageEndEvent):
                     persisted_count = await self._persist_messages_since(persisted_count)
@@ -1361,6 +1363,7 @@ class CodingSession:
                                     event=retry_event,
                                 )
                             )
+                        self._dispatch_extension_event(retry_event)
                         yield retry_event
                         if isinstance(retry_event, MessageEndEvent):
                             retry_persisted_count = await self._persist_messages_since(
@@ -1390,6 +1393,7 @@ class CodingSession:
                         phase="agent_loop",
                         event=event,
                     )
+                self._dispatch_extension_event(event)
                 yield event
                 if isinstance(event, MessageEndEvent):
                     persisted_count = await self._persist_messages_since(persisted_count)
@@ -1421,6 +1425,15 @@ class CodingSession:
             session_id=self.session_id,
             run_id=new_agent_call_run_id(),
         )
+
+    def _dispatch_extension_event(self, event: AgentEvent) -> None:
+        context = ExtensionContext(
+            cwd=self.cwd,
+            model=self.model,
+            provider_name=self.provider_name,
+            session_id=self.session_id,
+        )
+        self._extension_runtime.dispatch_agent_event(context, event)
 
     async def _persist_loaded_interrupted_tool_repairs(self) -> None:
         """Persist repairs for loaded sessions with dangling tool calls.

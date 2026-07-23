@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from typing import cast
 
 from tau_agent.events import (
     AgentEndEvent,
@@ -12,6 +13,7 @@ from tau_agent.events import (
     MessageDeltaEvent,
     MessageEndEvent,
     MessageStartEvent,
+    MessageUpdateEvent,
     QueueUpdateEvent,
     RetryEvent,
     ThinkingDeltaEvent,
@@ -21,6 +23,14 @@ from tau_agent.events import (
     TurnStartEvent,
 )
 from tau_agent.messages import AgentMessage, AssistantMessage, ToolResultMessage
+from tau_agent.provider_events import (
+    AssistantDoneEvent,
+    AssistantStartEvent,
+    TextDeltaEvent,
+)
+from tau_agent.provider_events import (
+    ThinkingDeltaEvent as AssistantThinkingDeltaEvent,
+)
 from tau_agent.tools import AgentTool, AgentToolResult, ToolCall
 from tau_agent.types import JSONValue
 from tau_ai.events import (
@@ -71,6 +81,7 @@ async def run_agent_loop(
 
         yield TurnStartEvent(turn=turn)
         assistant_message: AssistantMessage | None = None
+        partial_assistant = AssistantMessage(content="")
         saw_provider_error = False
 
         async for provider_event in provider.stream_response(
@@ -82,9 +93,30 @@ async def run_agent_loop(
         ):
             if isinstance(provider_event, ProviderResponseStartEvent):
                 yield MessageStartEvent()
+                yield MessageUpdateEvent(
+                    message=partial_assistant,
+                    assistant_message_event=AssistantStartEvent(partial=partial_assistant),
+                )
             elif isinstance(provider_event, ProviderTextDeltaEvent):
+                partial_assistant = partial_assistant.model_copy(
+                    update={"content": partial_assistant.content + provider_event.delta}
+                )
+                yield MessageUpdateEvent(
+                    message=partial_assistant,
+                    assistant_message_event=TextDeltaEvent(
+                        delta=provider_event.delta,
+                        partial=partial_assistant,
+                    ),
+                )
                 yield MessageDeltaEvent(delta=provider_event.delta)
             elif isinstance(provider_event, ProviderThinkingDeltaEvent):
+                yield MessageUpdateEvent(
+                    message=partial_assistant,
+                    assistant_message_event=AssistantThinkingDeltaEvent(
+                        delta=provider_event.delta,
+                        partial=partial_assistant,
+                    ),
+                )
                 yield ThinkingDeltaEvent(delta=provider_event.delta)
             elif isinstance(provider_event, ProviderRetryEvent):
                 yield RetryEvent(
@@ -97,6 +129,10 @@ async def run_agent_loop(
             elif isinstance(provider_event, ProviderResponseEndEvent):
                 assistant_message = provider_event.message
                 messages.append(assistant_message)
+                yield MessageUpdateEvent(
+                    message=assistant_message,
+                    assistant_message_event=AssistantDoneEvent(message=assistant_message),
+                )
                 yield MessageEndEvent(message=assistant_message)
             elif isinstance(provider_event, ProviderErrorEvent):
                 saw_provider_error = True
@@ -244,7 +280,7 @@ def _replace_tool_call_id(result: AgentToolResult, tool_call_id: str) -> AgentTo
     """
     model_copy = getattr(result, "model_copy", None)
     if callable(model_copy):
-        return model_copy(update={"tool_call_id": tool_call_id})
+        return cast(AgentToolResult, model_copy(update={"tool_call_id": tool_call_id}))
     return AgentToolResult(
         tool_call_id=tool_call_id,
         name=result.name,
