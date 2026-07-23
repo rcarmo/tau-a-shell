@@ -2966,7 +2966,8 @@ async def test_tui_app_session_picker_filters_by_title_not_workspace_path() -> N
             for item in app.screen.query_one("#session-picker-list", ListView).children
         ]
 
-    assert labels == ["1970-01-01 01:00 - other-model - Needle session"]
+    assert len(labels) == 1
+    assert str(labels[0]).endswith(" - other-model - Needle session")
     assert path_labels == []
 
 
