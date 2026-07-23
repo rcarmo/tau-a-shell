@@ -86,7 +86,7 @@ def test_version_command() -> None:
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "tau 42.0.3"
+    assert result.stdout.strip() == "tau 42.1.0"
 
 
 def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +99,7 @@ def test_version_command_does_not_check_for_updates(monkeypatch: pytest.MonkeyPa
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "tau 42.0.3"
+    assert result.stdout.strip() == "tau 42.1.0"
 
 
 def test_print_mode_writes_update_notice_to_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
