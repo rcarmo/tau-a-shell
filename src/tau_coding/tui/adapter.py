@@ -10,12 +10,20 @@ from tau_agent import (
     MessageDeltaEvent,
     MessageEndEvent,
     MessageStartEvent,
+    MessageUpdateEvent,
     QueueUpdateEvent,
     RetryEvent,
     ThinkingDeltaEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     ToolExecutionUpdateEvent,
+)
+from tau_agent.provider_events import (
+    AssistantDoneEvent,
+    TextDeltaEvent,
+)
+from tau_agent.provider_events import (
+    ThinkingDeltaEvent as AssistantThinkingDeltaEvent,
 )
 from tau_coding.tui.state import TuiState
 
@@ -25,6 +33,8 @@ class TuiEventAdapter:
 
     def __init__(self, state: TuiState) -> None:
         self.state = state
+        self._using_message_update = False
+        self._suppress_next_assistant_end = False
 
     def apply(self, event: AgentEvent) -> None:
         """Apply one agent event to the display state."""
@@ -43,12 +53,30 @@ class TuiEventAdapter:
                 self.state.assistant_buffer = ""
             return
 
+        if isinstance(event, MessageUpdateEvent):
+            self._using_message_update = True
+            assistant_event = event.assistant_message_event
+            if isinstance(assistant_event, TextDeltaEvent):
+                self.state.assistant_buffer += assistant_event.delta
+            elif isinstance(assistant_event, AssistantThinkingDeltaEvent):
+                self.state.add_thinking_delta(assistant_event.delta)
+            elif isinstance(assistant_event, AssistantDoneEvent):
+                text = assistant_event.message.content or self.state.assistant_buffer
+                if text:
+                    self.state.add_item("assistant", text)
+                self.state.assistant_buffer = ""
+                self._using_message_update = False
+                self._suppress_next_assistant_end = True
+            return
+
         if isinstance(event, MessageDeltaEvent):
-            self.state.assistant_buffer += event.delta
+            if not self._using_message_update:
+                self.state.assistant_buffer += event.delta
             return
 
         if isinstance(event, ThinkingDeltaEvent):
-            self.state.add_thinking_delta(event.delta)
+            if not self._using_message_update:
+                self.state.add_thinking_delta(event.delta)
             return
 
         if isinstance(event, QueueUpdateEvent):
@@ -61,10 +89,14 @@ class TuiEventAdapter:
                 return
             if event.message.role == "tool":
                 return
-            text = event.message.content or self.state.assistant_buffer
-            if text:
-                self.state.add_item("assistant", text)
-            self.state.assistant_buffer = ""
+            if self._suppress_next_assistant_end:
+                self._suppress_next_assistant_end = False
+                return
+            if not self._using_message_update:
+                text = event.message.content or self.state.assistant_buffer
+                if text:
+                    self.state.add_item("assistant", text)
+                self.state.assistant_buffer = ""
             return
 
         if isinstance(event, ToolExecutionStartEvent):

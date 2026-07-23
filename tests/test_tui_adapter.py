@@ -260,7 +260,10 @@ def test_tool_call_blocks_hide_raw_argument_fallbacks() -> None:
                 },
             )
         )
-        == "→ custom query='alpha beta gamma delta epsilon zeta eta theta…' items=[2 items] options={1 key} +1 more"
+        == (
+            "→ custom query='alpha beta gamma delta epsilon zeta eta theta…' "
+            "items=[2 items] options={1 key} +1 more"
+        )
     )
 
 
@@ -272,7 +275,9 @@ def test_tui_adapter_ignores_blank_tool_call_and_blank_unknown_tool_result() -> 
     state = TuiState()
     adapter = TuiEventAdapter(state)
 
-    adapter.apply(ToolExecutionStartEvent(tool_call=ToolCall(id="call-blank", name="", arguments={})))
+    adapter.apply(
+        ToolExecutionStartEvent(tool_call=ToolCall(id="call-blank", name="", arguments={}))
+    )
     adapter.apply(
         ToolExecutionEndEvent(
             result=AgentToolResult(
