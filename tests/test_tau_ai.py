@@ -1218,6 +1218,8 @@ def _weather_tool() -> AgentTool:
 def test_use_responses_api_routes_only_restricted_models() -> None:
     from tau_ai.openai_compatible import _use_responses_api
 
+    assert _use_responses_api("gpt-5.6-sol") is True
+    assert _use_responses_api("gpt-5.6-luna") is True
     assert _use_responses_api("gpt-5.5") is True
     assert _use_responses_api("gpt-5.5-pro") is True
     assert _use_responses_api("gpt-5.4") is True
@@ -1271,7 +1273,7 @@ async def test_responses_api_formats_request_for_restricted_model() -> None:
 
         events = await _collect(
             provider.stream_response(
-                model="gpt-5.5",
+                model="gpt-5.6-sol",
                 system="You are Tau.",
                 messages=messages,
                 tools=[_weather_tool()],
@@ -1292,7 +1294,7 @@ async def test_responses_api_formats_request_for_restricted_model() -> None:
     assert request.url == "https://example.test/v1/responses"
 
     payload = loads(request.content)
-    assert payload["model"] == "gpt-5.5"
+    assert payload["model"] == "gpt-5.6-sol"
     assert payload["stream"] is True
     assert payload["store"] is False
     assert payload["instructions"] == "You are Tau."
@@ -2196,6 +2198,28 @@ def test_codex_responses_input_sanitizes_foreign_tool_ids_and_drops_empty_names(
     )
 
     assert items == []
+
+
+def test_codex_tool_schema_renames_reserved_python_tool() -> None:
+    from tau_ai.openai_codex import _messages_to_responses_input, _tool_to_codex
+
+    tool = AgentTool(
+        name="python",
+        description="Run Python",
+        input_schema={"type": "object"},
+        executor=lambda _arguments, signal=None: None,  # type: ignore[arg-type]
+    )
+    assert _tool_to_codex(tool)["name"] == "tau_python"
+
+    items = _messages_to_responses_input(
+        [
+            AssistantMessage(
+                content="",
+                tool_calls=[ToolCall(id="call-1", name="python", arguments={"code": "1+1"})],
+            )
+        ]
+    )
+    assert items[0]["name"] == "tau_python"  # type: ignore[index]
 
 
 def test_openai_responses_input_sanitizes_foreign_tool_ids_and_drops_empty_names() -> None:

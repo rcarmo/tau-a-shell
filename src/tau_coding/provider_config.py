@@ -887,7 +887,15 @@ async def ensure_dynamic_provider_models(
         return settings
 
     model_ids = tuple(model.id for model in models)
+    catalog_context_windows: dict[str, int] = {}
+    try:
+        catalog_provider = provider_config_from_catalog_entry(provider.name)
+    except ProviderConfigError:
+        catalog_provider = None
+    if isinstance(catalog_provider, OpenAICompatibleProviderConfig):
+        catalog_context_windows = dict(catalog_provider.context_windows)
     context_windows = {
+        **catalog_context_windows,
         **dict(provider.context_windows),
         **{
             model.id: model.context_window

@@ -48,7 +48,7 @@ from tau_ai.retry import (
 
 # Models that reject function tools + reasoning_effort on /chat/completions and
 # must use the /v1/responses endpoint instead.
-_RESPONSES_ONLY_PREFIXES: tuple[str, ...] = ("gpt-5.5", "gpt-5.4")
+_RESPONSES_ONLY_PREFIXES: tuple[str, ...] = ("gpt-5.6", "gpt-5.5", "gpt-5.4")
 
 
 def _use_responses_api(model: str) -> bool:
@@ -962,7 +962,9 @@ def _message_to_openai(
 
     if isinstance(message, AssistantMessage):
         valid_tool_calls = [
-            tool_call for tool_call in message.tool_calls if tool_call.id not in invalid_tool_call_ids
+            tool_call
+            for tool_call in message.tool_calls
+            if tool_call.id not in invalid_tool_call_ids
         ]
         if not message.content and not valid_tool_calls:
             return None

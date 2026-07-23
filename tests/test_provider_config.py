@@ -1006,6 +1006,7 @@ async def test_ensure_dynamic_provider_models_uses_copilot_proxy_and_headers(
             200,
             json={
                 "data": [
+                    {"id": "gpt-5.6-sol"},
                     {"id": "gpt-5.5", "context_window": 272000},
                     {"id": "claude-sonnet-5", "context_window": 1000000},
                     {"id": "gemini-3.5-flash"},
@@ -1028,9 +1029,15 @@ async def test_ensure_dynamic_provider_models_uses_copilot_proxy_and_headers(
         "Bearer tid=1;proxy-ep=proxy.enterprise.test;token"
     )
     assert requests[0].headers["copilot-integration-id"] == "vscode-chat"
-    assert copilot.models == ("gpt-5.5", "claude-sonnet-5", "gemini-3.5-flash")
+    assert copilot.models == (
+        "gpt-5.6-sol",
+        "gpt-5.5",
+        "claude-sonnet-5",
+        "gemini-3.5-flash",
+    )
     assert copilot.default_model == "gpt-5.5"
-    assert copilot.context_windows["claude-sonnet-5"] == 1000000
+    assert copilot.context_windows["gpt-5.6-sol"] == 1_050_000
+    assert copilot.context_windows["claude-sonnet-5"] == 1_000_000
 
 
 @pytest.mark.anyio

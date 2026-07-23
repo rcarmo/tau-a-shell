@@ -445,6 +445,19 @@ class OpenAICodexProvider:
         return status_code is None or _is_retryable_status(status_code, body)
 
 
+_CODEX_RESERVED_TOOL_NAMES = {"python"}
+_CODEX_TOOL_NAME_PREFIX = "tau_"
+
+
+def _tool_name_to_codex(name: str) -> str:
+    return f"{_CODEX_TOOL_NAME_PREFIX}{name}" if name in _CODEX_RESERVED_TOOL_NAMES else name
+
+
+def _tool_name_from_codex(name: str) -> str:
+    candidate = name.removeprefix(_CODEX_TOOL_NAME_PREFIX)
+    return candidate if name.startswith(_CODEX_TOOL_NAME_PREFIX) else name
+
+
 class _ToolCallBuilder:
     def __init__(self, *, call_id: str, item_id: str | None, name: str) -> None:
         self.call_id = call_id
@@ -486,7 +499,7 @@ class _ToolCallBuilder:
         item_id = self.item_id or f"fc_{self.call_id}"
         return ToolCall(
             id=f"{self.call_id}|{item_id}",
-            name=self.name,
+            name=_tool_name_from_codex(self.name),
             arguments=arguments,
         )
 
@@ -560,7 +573,7 @@ def _messages_to_responses_input(messages: list[AgentMessage]) -> list[JSONValue
                 item: dict[str, JSONValue] = {
                     "type": "function_call",
                     "call_id": _codex_call_id(call_id),
-                    "name": tool_call.name,
+                    "name": _tool_name_to_codex(tool_call.name),
                     "arguments": dumps(tool_call.arguments),
                 }
                 if item_id:
@@ -615,7 +628,7 @@ def _codex_item_id(value: str) -> str:
 def _tool_to_codex(tool: AgentTool) -> dict[str, JSONValue]:
     return {
         "type": "function",
-        "name": tool.name,
+        "name": _tool_name_to_codex(tool.name),
         "description": tool.description,
         "parameters": dict(tool.input_schema),
         "strict": None,
