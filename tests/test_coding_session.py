@@ -1603,6 +1603,8 @@ async def test_session_builds_system_prompt_when_system_is_omitted(tmp_path: Pat
     assert "Available tools:\n- read: Read file contents" in provider.calls[0][1]
     assert '<project_instructions path="' in provider.calls[0][1]
     assert "Follow project rules." in provider.calls[0][1]
+    assert "Tau Prime self-knowledge" in provider.calls[0][1]
+    assert "builtin://tau-prime/overview.md" in provider.calls[0][1]
     assert "<available_skills>" in provider.calls[0][1]
     assert "<name>testing</name>" in provider.calls[0][1]
     assert [Path(context_file.path).name for context_file in session.context_files] == ["AGENTS.md"]

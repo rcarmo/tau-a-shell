@@ -11,9 +11,7 @@ import base64
 import csv
 import hashlib
 import io
-import os
 import tarfile
-import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -130,10 +128,14 @@ def _package_files() -> list[tuple[Path, str]]:
     shim = src / "pydantic.py"
     if shim.exists():
         files.append((shim, "pydantic.py"))
+    package_data_suffixes = {".md"}
     for package in ("tau_ai", "tau_agent", "tau_coding"):
         package_root = src / package
-        for path in package_root.rglob("*.py"):
-            files.append((path, path.relative_to(src).as_posix()))
+        for path in package_root.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix == ".py" or path.suffix in package_data_suffixes:
+                files.append((path, path.relative_to(src).as_posix()))
     return sorted(files, key=lambda item: item[1])
 
 

@@ -102,6 +102,7 @@ from tau_coding.resources import (
     TauResourcePaths,
     resource_paths_with_cwd,
 )
+from tau_coding.self_knowledge import bundled_self_knowledge_context
 from tau_coding.session_export import (
     default_session_export_artifact_path,
     export_session_artifact,
@@ -341,7 +342,7 @@ class CodingSession:
                     skills=resources.skills,
                     custom_prompt=config.custom_system_prompt,
                     append_system_prompt=append_system_prompt,
-                    context_files=resources.context_files,
+                    context_files=(*bundled_self_knowledge_context(), *resources.context_files),
                 )
             )
         )
@@ -1027,7 +1028,7 @@ class CodingSession:
                     skills=resources.skills,
                     custom_prompt=self._config.custom_system_prompt,
                     append_system_prompt=self._config.append_system_prompt,
-                    context_files=resources.context_files,
+                    context_files=(*bundled_self_knowledge_context(), *resources.context_files),
                 )
             )
             system_prompt_rebuilt = True
