@@ -65,6 +65,7 @@ from tau_coding.tui.app import (
     SkillPickerScreen,
     TauTuiApp,
     ThemePickerScreen,
+    ToolsReferenceScreen,
     TreePickerScreen,
     _activity_prompt_border_color,
     _completion_selected_render_line,
@@ -224,6 +225,8 @@ class FakeSession:
             return CommandResult(handled=True, scoped_models_picker_requested=True)
         if text == "/skills":
             return CommandResult(handled=True, skills_picker_requested=True)
+        if text == "/tools":
+            return CommandResult(handled=True, tools_picker_requested=True)
         if text.startswith("/thinking "):
             return CommandResult(handled=True, thinking_level=text.removeprefix("/thinking "))
         if text == "/theme":
@@ -2362,6 +2365,30 @@ async def test_tui_app_new_command_starts_new_visible_state() -> None:
         await pilot.pause()
 
         assert prompt.value == ""
+
+
+@pytest.mark.anyio
+async def test_tui_app_tools_command_opens_searchable_reference() -> None:
+    session = FakeSession(messages=[])
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "/tools"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, ToolsReferenceScreen)
+        search = app.screen.query_one("#tools-reference-search", Input)
+        assert app.screen.focused is search
+        search.value = "python"
+        await pilot.pause()
+        labels = [
+            item.query_one(Label).content
+            for item in app.screen.query_one("#tools-reference-list", ListView).children
+        ]
+
+    assert any(str(label).startswith("python - Built in -") for label in labels)
 
 
 @pytest.mark.anyio

@@ -115,6 +115,7 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
         "system",
         "theme",
         "thinking",
+        "tools",
         "tree",
     ]
 
@@ -339,6 +340,19 @@ def test_non_pi_commands_pass_through_as_prompts(tmp_path: Path) -> None:
         result = registry.execute(session, command)
         assert result.handled is False
         assert result.message is None
+
+
+def test_tools_command_requests_picker(tmp_path: Path) -> None:
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/tools")
+
+    assert result.handled is True
+    assert result.tools_picker_requested is True
+
+
+def test_tools_command_rejects_arguments(tmp_path: Path) -> None:
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/tools read")
+
+    assert result.message == "Usage: /tools"
 
 
 def test_skills_command_requests_picker(tmp_path: Path) -> None:

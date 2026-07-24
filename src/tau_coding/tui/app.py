@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -574,6 +574,99 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def action_cancel(self) -> None:
         """Close the picker without selecting a session."""
         self.dismiss(None)
+
+
+class ToolsReferenceScreen(ModalScreen[None]):
+    """Searchable modal containing tools visible to the active session."""
+
+    BINDINGS: ClassVar[list[BindingEntry]] = [
+        Binding("escape,ctrl+c", "cancel", "Close", priority=True),
+        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("down", "cursor_down", "Down", show=False, priority=True),
+        Binding("enter", "open_selected", "Open", show=False, priority=True),
+    ]
+
+    def __init__(
+        self,
+        tools: Sequence[AgentTool],
+        *,
+        extension_sources: Mapping[str, str],
+        theme: TuiTheme,
+    ) -> None:
+        super().__init__()
+        self.tools = tuple(sorted(tools, key=lambda tool: tool.name.casefold()))
+        self.visible_tools = self.tools
+        self.extension_sources = dict(extension_sources)
+        self.theme = theme
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="tools-reference"):
+            yield Static("Available tools", id="tools-reference-title")
+            yield Input(placeholder="Search tools", id="tools-reference-search")
+            yield ListView(id="tools-reference-list")
+            yield Static("Enter opens description - Escape closes", id="tools-reference-help")
+
+    def on_mount(self) -> None:
+        self._refresh_tools("")
+        self.query_one("#tools-reference-search", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "tools-reference-search":
+            event.stop()
+            self._refresh_tools(event.value)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self._open_tool(event.index)
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#tools-reference-list", ListView).action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#tools-reference-list", ListView).action_cursor_down()
+
+    def action_open_selected(self) -> None:
+        index = self.query_one("#tools-reference-list", ListView).index
+        if index is not None:
+            self._open_tool(index)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _open_tool(self, index: int) -> None:
+        if not 0 <= index < len(self.visible_tools):
+            return
+        tool = self.visible_tools[index]
+        self.app.push_screen(
+            CommandOutputScreen(
+                f"{tool.name} — {_tool_source_label(tool, self.extension_sources)}",
+                tool.description or tool.prompt_snippet or "No description",
+                theme=self.theme,
+            )
+        )
+
+    def _refresh_tools(self, search: str) -> None:
+        query = search.casefold().strip()
+        self.visible_tools = tuple(
+            tool
+            for tool in self.tools
+            if not query
+            or query in tool.name.casefold()
+            or query in (tool.description or "").casefold()
+            or query in (tool.prompt_snippet or "").casefold()
+            or query in _tool_source_label(tool, self.extension_sources).casefold()
+        )
+        tool_list = self.query_one("#tools-reference-list", ListView)
+        tool_list.clear()
+        if not self.visible_tools:
+            tool_list.append(ListItem(Label("No tools match your search.", markup=False)))
+            tool_list.index = None
+            return
+        tool_list.extend(
+            ListItem(Label(_tool_reference_label(tool, self.extension_sources), markup=False))
+            for tool in self.visible_tools
+        )
+        tool_list.index = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -2385,6 +2478,8 @@ class TauTuiApp(App[None]):
                 self._open_scoped_models_picker()
             if command.skills_picker_requested:
                 self._open_skills_picker(raw_text)
+            if command.tools_picker_requested:
+                self._open_tools_reference()
             if command.theme_picker_requested:
                 self._open_theme_picker()
             if command.compaction_settings_requested:
@@ -3318,6 +3413,15 @@ class TauTuiApp(App[None]):
         provider_label = "on" if provider_enabled else "off"
         self._notify(f"Provider compaction {provider_label}; local strategy {strategy}.")
 
+    def _open_tools_reference(self) -> None:
+        self.push_screen(
+            ToolsReferenceScreen(
+                self.session.tools,
+                extension_sources=getattr(self.session, "extension_tool_sources", {}),
+                theme=self.tui_settings.resolved_theme,
+            )
+        )
+
     def _open_skills_picker(self, original_text: str) -> None:
         if not self.session.skills:
             self._notify("No skills loaded.", severity="warning")
@@ -3796,6 +3900,15 @@ def _short_path(path: Path) -> str:
         return f"~/{path.relative_to(home)}"
     except ValueError:
         return str(path)
+
+
+def _tool_source_label(tool: AgentTool, extension_sources: Mapping[str, str]) -> str:
+    return extension_sources.get(tool.name, "Built in")
+
+
+def _tool_reference_label(tool: AgentTool, extension_sources: Mapping[str, str]) -> str:
+    description = tool.description or tool.prompt_snippet or "No description"
+    return f"{tool.name} - {_tool_source_label(tool, extension_sources)} - {description}"
 
 
 def _skill_picker_label(skill: Skill) -> str:

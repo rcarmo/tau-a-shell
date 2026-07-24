@@ -691,6 +691,11 @@ class CodingSession:
         return self._extension_runtime
 
     @property
+    def extension_tool_sources(self) -> dict[str, str]:
+        """Return extension-owned tool names mapped to extension names."""
+        return dict(self._extension_runtime.extension_tool_sources)
+
+    @property
     def command_registry(self) -> CommandRegistry:
         """Return the slash-command registry used by this session."""
         return self._command_registry

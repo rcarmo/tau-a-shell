@@ -109,6 +109,7 @@ class CommandResult:
     model_picker_requested: bool = False
     scoped_models_picker_requested: bool = False
     skills_picker_requested: bool = False
+    tools_picker_requested: bool = False
     theme_picker_requested: bool = False
     compaction_settings_requested: bool = False
     thinking_level: str | None = None
@@ -279,6 +280,15 @@ def create_default_command_registry() -> CommandRegistry:
             description="Browse and insert a loaded skill.",
             handler=_skills_command,
             search_terms=("skill", "picker"),
+        )
+    )
+    registry.register(
+        SlashCommand(
+            name="tools",
+            usage="/tools",
+            description="Browse tools available to the active session.",
+            handler=_tools_command,
+            search_terms=("capabilities", "reference"),
         )
     )
     registry.register(
@@ -467,6 +477,12 @@ def _hotkeys_command(context: CommandContext) -> CommandResult:
         "- Ctrl+D: quit",
     ]
     return CommandResult(handled=True, message="\n".join(lines))
+
+
+def _tools_command(context: CommandContext) -> CommandResult:
+    if context.args.strip():
+        return CommandResult(handled=True, message="Usage: /tools")
+    return CommandResult(handled=True, tools_picker_requested=True)
 
 
 def _skills_command(context: CommandContext) -> CommandResult:

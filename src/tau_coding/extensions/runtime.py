@@ -43,6 +43,7 @@ class ExtensionRuntime:
 
     def __init__(self) -> None:
         self.tools: dict[str, AgentTool] = {}
+        self.extension_tool_sources: dict[str, str] = {}
         self.commands: dict[str, ExtensionCommand] = {}
         self.prompt_guidelines: list[str] = []
         self.input_hooks: list[ExtensionInputHook] = []
@@ -68,6 +69,7 @@ class ExtensionRuntime:
             sys.modules.pop(module_name, None)
         self._modules.clear()
         self.tools.clear()
+        self.extension_tool_sources.clear()
         self.commands.clear()
         self.prompt_guidelines.clear()
         self.input_hooks.clear()
@@ -156,6 +158,7 @@ class ExtensionRuntime:
             )
             return
         self.tools[tool.name] = tool
+        self.extension_tool_sources[tool.name] = extension_name
 
     def register_command(
         self,
