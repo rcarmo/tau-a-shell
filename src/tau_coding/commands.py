@@ -108,6 +108,7 @@ class CommandResult:
     logout_provider: str | None = None
     model_picker_requested: bool = False
     scoped_models_picker_requested: bool = False
+    skills_picker_requested: bool = False
     theme_picker_requested: bool = False
     compaction_settings_requested: bool = False
     thinking_level: str | None = None
@@ -269,6 +270,15 @@ def create_default_command_registry() -> CommandRegistry:
             description="Expand a loaded skill into your prompt.",
             handler=_skill_command,
             search_terms=("skills",),
+        )
+    )
+    registry.register(
+        SlashCommand(
+            name="skills",
+            usage="/skills",
+            description="Browse and insert a loaded skill.",
+            handler=_skills_command,
+            search_terms=("skill", "picker"),
         )
     )
     registry.register(
@@ -460,6 +470,12 @@ def _hotkeys_command(context: CommandContext) -> CommandResult:
 
 
 def _skills_command(context: CommandContext) -> CommandResult:
+    if context.args.strip():
+        return CommandResult(handled=True, message="Usage: /skills")
+    return CommandResult(handled=True, skills_picker_requested=True)
+
+
+def _skills_list_command(context: CommandContext) -> CommandResult:
     if not context.session.skills:
         lines = ["No skills loaded."]
         if context.session.resource_diagnostics:

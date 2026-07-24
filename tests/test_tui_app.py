@@ -62,6 +62,7 @@ from tau_coding.tui.app import (
     OAuthLoginScreen,
     PromptInput,
     SessionPickerScreen,
+    SkillPickerScreen,
     TauTuiApp,
     ThemePickerScreen,
     TreePickerScreen,
@@ -221,6 +222,8 @@ class FakeSession:
             return CommandResult(handled=True, model_picker_requested=True)
         if text in {"/scoped-models", "/scoped models"}:
             return CommandResult(handled=True, scoped_models_picker_requested=True)
+        if text == "/skills":
+            return CommandResult(handled=True, skills_picker_requested=True)
         if text.startswith("/thinking "):
             return CommandResult(handled=True, thinking_level=text.removeprefix("/thinking "))
         if text == "/theme":
@@ -2356,6 +2359,60 @@ async def test_tui_app_new_command_starts_new_visible_state() -> None:
         assert notifications == []
 
         await pilot.press("up")
+        await pilot.pause()
+
+        assert prompt.value == ""
+
+
+@pytest.mark.anyio
+async def test_tui_app_skills_command_opens_searchable_picker() -> None:
+    session = FakeSession(messages=[])
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "/skills"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, SkillPickerScreen)
+        search = app.screen.query_one("#skill-picker-search", Input)
+        assert app.screen.focused is search
+        search.value = "review"
+        await pilot.pause()
+        labels = [
+            item.query_one(Label).content
+            for item in app.screen.query_one("#skill-picker-list", ListView).children
+        ]
+
+    assert labels == ["review - No description"]
+
+
+@pytest.mark.anyio
+async def test_tui_app_skills_picker_inserts_skill_invocation() -> None:
+    session = FakeSession(messages=[])
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "/skills"
+        await pilot.press("enter")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == "/skill:review "
+
+
+@pytest.mark.anyio
+async def test_tui_app_skills_picker_cancel_clears_command() -> None:
+    session = FakeSession(messages=[])
+    app = TauTuiApp(session)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", PromptInput)
+        prompt.value = "/skills"
+        await pilot.press("enter")
+        await pilot.press("escape")
         await pilot.pause()
 
         assert prompt.value == ""

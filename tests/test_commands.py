@@ -111,6 +111,7 @@ def test_registered_commands_are_pi_aligned(tmp_path: Path) -> None:
         "scoped-models",
         "session",
         "skill",
+        "skills",
         "system",
         "theme",
         "thinking",
@@ -334,10 +335,23 @@ def test_non_pi_commands_pass_through_as_prompts(tmp_path: Path) -> None:
     registry = create_default_command_registry()
     session = FakeSession(tmp_path)
 
-    for command in ("/provider", "/skills", "/resources", "/context", "/help"):
+    for command in ("/provider", "/resources", "/context", "/help"):
         result = registry.execute(session, command)
         assert result.handled is False
         assert result.message is None
+
+
+def test_skills_command_requests_picker(tmp_path: Path) -> None:
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/skills")
+
+    assert result.handled is True
+    assert result.skills_picker_requested is True
+
+
+def test_skills_command_rejects_arguments(tmp_path: Path) -> None:
+    result = create_default_command_registry().execute(FakeSession(tmp_path), "/skills review")
+
+    assert result.message == "Usage: /skills"
 
 
 def test_login_command_requests_provider_picker(tmp_path: Path) -> None:

@@ -89,6 +89,7 @@ from tau_coding.session import (
 )
 from tau_coding.session_manager import CodingSessionRecord, SessionManager
 from tau_coding.shell_config import load_shell_settings
+from tau_coding.skills import Skill
 from tau_coding.tui.adapter import TuiEventAdapter
 from tau_coding.tui.autocomplete import (
     CompletionItem,
@@ -573,6 +574,113 @@ class SessionPickerScreen(ModalScreen[str | None]):
     def action_cancel(self) -> None:
         """Close the picker without selecting a session."""
         self.dismiss(None)
+
+
+@dataclass(frozen=True, slots=True)
+class SkillPickerResult:
+    skill: Skill
+    action: Literal["insert", "transcript"] = "insert"
+
+
+class SkillPickerScreen(ModalScreen[SkillPickerResult | None]):
+    """Searchable modal containing every loaded skill."""
+
+    BINDINGS: ClassVar[list[BindingEntry]] = [
+        Binding("escape,ctrl+c", "cancel", "Cancel", priority=True),
+        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("down", "cursor_down", "Down", show=False, priority=True),
+        Binding("enter", "select_cursor", "Insert", show=False, priority=True),
+        Binding("ctrl+enter", "show_in_transcript", "Transcript", show=False, priority=True),
+    ]
+
+    def __init__(self, skills: Sequence[Skill], *, theme: TuiTheme) -> None:
+        super().__init__()
+        self.skills = tuple(sorted(skills, key=lambda skill: skill.name.casefold()))
+        self.visible_skills = self.skills
+        self.theme = theme
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="skill-picker"):
+            yield Static("Skills", id="skill-picker-title")
+            yield Input(placeholder="Search skills", id="skill-picker-search")
+            yield ListView(id="skill-picker-list")
+            yield Static("", id="skill-picker-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#skill-picker-search", Input).focus()
+        self._refresh_skill_list("")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "skill-picker-search":
+            event.stop()
+            self._refresh_skill_list(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "skill-picker-search":
+            event.stop()
+            self.action_select_cursor()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        self.action_select_cursor()
+
+    def action_cursor_up(self) -> None:
+        skill_list = self.query_one("#skill-picker-list", ListView)
+        if skill_list.index is not None:
+            skill_list.index = max(0, skill_list.index - 1)
+
+    def action_cursor_down(self) -> None:
+        skill_list = self.query_one("#skill-picker-list", ListView)
+        if skill_list.index is not None:
+            skill_list.index = min(len(self.visible_skills) - 1, skill_list.index + 1)
+
+    def action_select_cursor(self) -> None:
+        skill = self._selected_skill()
+        if skill is not None:
+            self.dismiss(SkillPickerResult(skill))
+
+    def action_show_in_transcript(self) -> None:
+        skill = self._selected_skill()
+        if skill is not None:
+            self.dismiss(SkillPickerResult(skill, "transcript"))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _selected_skill(self) -> Skill | None:
+        index = self.query_one("#skill-picker-list", ListView).index
+        if index is None or not self.visible_skills:
+            return None
+        return self.visible_skills[index]
+
+    def _refresh_skill_list(self, search: str) -> None:
+        query = search.casefold().strip()
+        self.visible_skills = tuple(
+            skill
+            for skill in self.skills
+            if not query
+            or query in skill.name.casefold()
+            or query in (skill.description or "").casefold()
+        )
+        skill_list = self.query_one("#skill-picker-list", ListView)
+        skill_list.clear()
+        skill_list.extend(
+            ListItem(
+                Label(
+                    _skill_picker_label(skill),
+                    markup=False,
+                )
+            )
+            for skill in self.visible_skills
+        )
+        skill_list.index = 0 if self.visible_skills else None
+        if not self.skills:
+            help_text = "No skills loaded - Escape closes"
+        elif not self.visible_skills:
+            help_text = "No matching skills - Escape closes"
+        else:
+            help_text = "Enter inserts - Ctrl+Enter shows full skill"
+        self.query_one("#skill-picker-help", Static).update(help_text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2275,6 +2383,8 @@ class TauTuiApp(App[None]):
                 self._open_model_picker()
             if command.scoped_models_picker_requested:
                 self._open_scoped_models_picker()
+            if command.skills_picker_requested:
+                self._open_skills_picker(raw_text)
             if command.theme_picker_requested:
                 self._open_theme_picker()
             if command.compaction_settings_requested:
@@ -3208,6 +3318,38 @@ class TauTuiApp(App[None]):
         provider_label = "on" if provider_enabled else "off"
         self._notify(f"Provider compaction {provider_label}; local strategy {strategy}.")
 
+    def _open_skills_picker(self, original_text: str) -> None:
+        if not self.session.skills:
+            self._notify("No skills loaded.", severity="warning")
+            return
+        self.push_screen(
+            SkillPickerScreen(self.session.skills, theme=self.tui_settings.resolved_theme),
+            callback=lambda result: self._handle_skills_picker_result(result, original_text),
+        )
+
+    def _handle_skills_picker_result(
+        self,
+        result: SkillPickerResult | None,
+        original_text: str,
+    ) -> None:
+        prompt = self.query_one("#prompt", PromptInput)
+        if result is None:
+            if prompt.text.strip() == original_text.strip():
+                prompt.text = ""
+            return
+        if result.action == "transcript":
+            self.push_screen(
+                CommandOutputScreen(
+                    f"Skill: {result.skill.name}",
+                    result.skill.content,
+                    theme=self.tui_settings.resolved_theme,
+                )
+            )
+            return
+        prompt.text = f"/skill:{result.skill.name} "
+        prompt.move_cursor(_text_end_location(prompt.text))
+        prompt.focus()
+
     def _open_theme_picker(self) -> None:
         self.push_screen(
             ThemePickerScreen(
@@ -3654,6 +3796,11 @@ def _short_path(path: Path) -> str:
         return f"~/{path.relative_to(home)}"
     except ValueError:
         return str(path)
+
+
+def _skill_picker_label(skill: Skill) -> str:
+    description = skill.description or "No description"
+    return f"{skill.name} - {description}"
 
 
 def _session_picker_label(record: SessionCompletionRecord) -> str:
