@@ -358,13 +358,14 @@ class PromptInput(TextArea):
     def get_line(self, line_index: int) -> Text:
         """Retrieve one prompt line with shell prefixes highlighted."""
         line = super().get_line(line_index)
-        if line_index != 0 or not self.shell_mode_style:
+        if not self.shell_mode_style:
             return line
         span = _terminal_command_prefix_span(self.text)
         if span is None:
             return line
-        start, end = span
-        line.stylize(self.shell_mode_style, start, end)
+        start, _end = span
+        style_start = start if line_index == 0 else 0
+        line.stylize(self.shell_mode_style, style_start)
         return line
 
     async def action_submit_follow_up(self) -> None:
@@ -2277,7 +2278,7 @@ class TauTuiApp(App[None]):
     async def on_mount(self) -> None:
         """Focus the prompt when the app starts."""
         prompt = self.query_one(PromptInput)
-        prompt.shell_mode_style = self.tui_settings.resolved_theme.accent
+        prompt.shell_mode_style = self.tui_settings.resolved_theme.role_styles["tool"].border
         self._sync_prompt_shell_mode(prompt.text)
         prompt.focus()
         self._update_responsive_layout(self.size.width, self.size.height)
@@ -3619,13 +3620,14 @@ class TauTuiApp(App[None]):
             prompt_prefix = self.query_one("#prompt-prefix", Static)
         except NoMatches:
             return
+        shell_mode = _is_terminal_command_prompt(prompt.text)
         prompt.styles.border = (
             "tall",
             _activity_prompt_border_color(
                 theme,
                 frame=self._activity_frame,
                 running=self.state.running,
-                shell_mode=_is_terminal_command_prompt(prompt.text),
+                shell_mode=shell_mode,
             ),
         )
         prompt_prefix.update(
@@ -3633,6 +3635,7 @@ class TauTuiApp(App[None]):
                 theme,
                 frame=self._activity_frame,
                 running=self.state.running,
+                shell_mode=shell_mode,
             )
         )
 
@@ -3684,7 +3687,7 @@ class TauTuiApp(App[None]):
 
     def _sync_prompt_shell_mode(self, text: str) -> None:
         prompt = self.query_one("#prompt", PromptInput)
-        prompt.shell_mode_style = self.tui_settings.resolved_theme.accent
+        prompt.shell_mode_style = self.tui_settings.resolved_theme.role_styles["tool"].border
         prompt.set_class(_is_terminal_command_prompt(text), "-shell-mode")
         prompt.refresh()
         self._apply_activity_indicator()
@@ -3700,13 +3703,21 @@ def _activity_prompt_border_color(
     """Return the prompt border color for the current activity animation frame."""
     del frame, running
     if shell_mode:
-        return theme.accent
+        return theme.role_styles["tool"].border
     return theme.prompt_border
 
 
-def _render_activity_indicator(theme: TuiTheme, *, frame: int, running: bool) -> Text:
+def _render_activity_indicator(
+    theme: TuiTheme,
+    *,
+    frame: int,
+    running: bool,
+    shell_mode: bool = False,
+) -> Text:
     """Render the prompt prefix, turning Tau into a moving square while running."""
     if not running:
+        if shell_mode:
+            return Text("$", style=f"bold {theme.role_styles['tool'].border}")
         return Text("τ", style=f"bold {theme.accent}")
 
     cycle_length = (ACTIVITY_INDICATOR_HEIGHT - 1) * 2
